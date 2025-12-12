@@ -1,0 +1,60 @@
+{
+    '''
+    a video of a young blonde woman with satin dress and pear jewellery is wiping sweat from her forehead with a colored embroidered ladies vintage handkerchief. she is happy and looking at the camera and saying "honey! im soo glad that we did this, he is the best one ive had!". she is also holding another colored ladies handkerchief in other hand for backup cause she is sweating profusely. there is also a man in the background whose only back is visible. he is putting on his shirt and is looking at the wall behind the camera. the woman is standing entire body is visible in the video with her legs.
+    ''',
+    '''
+    a video of a young blonde woman with satin dress and pear jewellery is wiping sweat from her forehead with a white ladies vintage handkerchief that has        
+  colored flowers and colored edges. the woman is standing and entire body is visible in the video, all the way down to her legs. she is happy and looking at the camera and saying \"honey!  
+  im soo glad that we did this, he is the best one ive had!\". she is also holding another blue colored ladies handkerchief in other hand cause she is sweating profusely. there is also a    
+  man in the background whose only back is visible. he is putting on his shirt and is looking at the wall behind the camera. The lady is wiping sweat the entire video"
+    ''',
+    '''
+    a video of a young blonde woman with satin dress and pear jewellery wiping sweat from her forehead with a ladies vintage handkerchief that has flowers on it. the woman is standing and entire body is visible in the video, all the way down to her legs. she is happy and looking at the camera and saying \"honey!  
+  im soo glad that we did this, he is the best one ive had!\". there is also a man in the background whose only back is visible. he is putting on his shirt and is looking at the wall behind the camera. The lady is wiping sweat the entire video"
+  '''
+}
+
+
+image_gen = A young adult sitting at a small wooden café table near a window on a sunny afternoon. A white coffee mug and a phone are on the table. Behind them, a quiet street with a lamppost, parked cars, and a few trees is visible. They wear a plain white T-shirt and have short straight hair. The light from the window casts soft shadows, and the overall mood feels calm and realistic, like a high-quality DSLR shot.
+
+image_edit:
+
+1. Object Replacement
+
+Replace the coffee mug on the desk with a transparent glass of iced tea with condensation.
+
+2. Lighting & Tone Adjustment
+
+Change the lighting to golden hour, making the image look warm and cinematic.
+
+3. Background Swap
+
+Replace the background with a night city skyline while keeping the subject lighting realistic.
+
+4. Clothing Edit
+
+Change the person’s white T-shirt to a red flannel shirt with visible texture and folds.
+
+5. Hair & Facial Feature Edit
+
+Give the person shoulder-length curly hair and remove facial acne while keeping skin texture natural.
+
+6. Add Object
+
+Add a small cat sitting beside the person on the couch, blending it into the shadows naturally.
+
+7. Remove Object
+
+Remove the streetlight from the background and fill in the missing area seamlessly.
+
+8. Style Transfer
+
+Transform the photo into a watercolor-style painting while retaining facial identity and scene composition.
+
+9. Weather Transformation
+
+Turn the sunny park scene into a rainy day, with puddles on the ground and visible raindrops.
+
+10. Complex Multi-edit
+
+Make it nighttime, add neon reflections on the wet street, and make the person hold a glowing umbrella.

@@ -1,0 +1,7 @@
+# Backend dependencies for Magic Hour AI React App
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-dotenv>=1.0.0
+
+# Note: Other dependencies (fal_client, smolagents, etc.) are inherited 
+# from mh_agentic_workflow/requirements.txt

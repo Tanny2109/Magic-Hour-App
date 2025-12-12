@@ -1,0 +1,139 @@
+{
+  "styles": {
+    "Anime": [
+      {"name": "Seedream 4.0", "api": "fal-ai/bytedance/seedream/v4/text-to-image"},
+      {"name": "Imagen 4 Preview 0606", "api": "fal-ai/imagen4/preview"},
+      {"name": "GPT-4o", "api": "fal-ai/gpt-image-1/text-to-image/byok"},
+      {"name": "Seedream 3.0", "api": "fal-ai/bytedance/seedream/v3/text-to-image"},
+      {"name": "Qwen-Image", "api": "fal-ai/qwen-image"},
+      {"name": "Imagen 4 Ultra Preview 0606", "api": "fal-ai/imagen4/preview/ultra"},
+      {"name": "Gemini 2.5 Flash (Nano-Banana)", "api": "fal-ai/gemini-25-flash-image"}
+    ],
+    "Cartoon & Illustration": [
+      {"name": "GPT-4o", "api": "fal-ai/gpt-image-1/text-to-image/byok"},
+      {"name": "Recraft V3", "api": "fal-ai/recraft/v3/text-to-image"},
+      {"name": "Kolors 2.1", "api": "fal-ai/kolors"},
+      {"name": "Ideogram 3.0", "api": "fal-ai/ideogram/v3"},
+      {"name": "FLUX1.1 [pro] Ultra", "api": "fal-ai/flux-pro/v1.1-ultra"},
+      {"name": "FLUX1.1 [pro]", "api": "fal-ai/flux-pro/v1.1"}
+    ],
+    "General & Photorealistic": [
+      {"name": "Seedream 4.0", "api": "fal-ai/bytedance/seedream/v4/text-to-image"},
+      {"name": "GPT-4o", "api": "fal-ai/gpt-image-1/text-to-image/byok"},
+      {"name": "Imagen 4 Ultra Preview 0606", "api": "fal-ai/imagen4/preview/ultra"},
+      {"name": "Imagen 4 Preview 0606", "api": "fal-ai/imagen4/preview"},
+      {"name": "Gemini 2.5 Flash (Nano-Banana)", "api": "fal-ai/gemini-25-flash-image"},
+      {"name": "Dreamina 3.1", "api": "fal-ai/bytedance/dreamina/v3.1/text-to-image"}
+    ],
+    "Graphic Design & Digital Rendering": [
+      {"name": "GPT-4o", "api": "fal-ai/gpt-image-1/text-to-image/byok"},
+      {"name": "Recraft V3", "api": "fal-ai/recraft/v3/text-to-image"},
+      {"name": "Ideogram 3.0", "api": "fal-ai/ideogram/v3"},
+      {"name": "Qwen-Image", "api": "fal-ai/qwen-image"},
+      {"name": "FLUX1.1 [pro] Ultra", "api": "fal-ai/flux-pro/v1.1-ultra"},
+      {"name": "FLUX1.1 [pro]", "api": "fal-ai/flux-pro/v1.1"},
+      {"name": "Gemini 2.5 Flash (Nano-Banana)", "api": "fal-ai/gemini-25-flash-image"},
+      {"name": "Seedream 3.0", "api": "fal-ai/bytedance/seedream/v3/text-to-image"}
+    ],
+    "Traditional Art": [
+      {"name": "Recraft V3", "api": "fal-ai/recraft/v3/text-to-image"},
+      {"name": "GPT-4o", "api": "fal-ai/gpt-image-1/text-to-image/byok"},
+      {"name": "Seedream 4.0", "api": "fal-ai/bytedance/seedream/v4/text-to-image"},
+      {"name": "Seedream 3.0", "api": "fal-ai/bytedance/seedream/v3/text-to-image"},
+      {"name": "Gemini 2.5 Flash (Nano-Banana)", "api": "fal-ai/gemini-25-flash-image"},
+      {"name": "Ideogram 3.0", "api": "fal-ai/ideogram/v3"},
+      {"name": "Qwen-Image", "api": "fal-ai/qwen-image"}
+    ],
+    "Vintage & Retro": [
+      {"name": "Recraft V3", "api": "fal-ai/recraft/v3/text-to-image"},
+      {"name": "GPT-4o", "api": "fal-ai/gpt-image-1/text-to-image/byok"},
+      {"name": "Ideogram 3.0", "api": "fal-ai/ideogram/v3"},
+      {"name": "Seedream 4.0", "api": "fal-ai/bytedance/seedream/v4/text-to-image"},
+      {"name": "Gemini 2.5 Flash (Nano-Banana)", "api": "fal-ai/gemini-25-flash-image"}
+    ]
+  },
+  "subjects": {
+    "Commercial": [
+      {"name": "GPT-4o", "api": "fal-ai/gpt-image-1/text-to-image/byok"},
+      {"name": "Imagen 4 Ultra Preview 0606", "api": "fal-ai/imagen4/preview/ultra"},
+      {"name": "Seedream 4.0", "api": "fal-ai/bytedance/seedream/v4/text-to-image"},
+      {"name": "Imagen 4 Preview 0606", "api": "fal-ai/imagen4/preview"},
+      {"name": "Gemini 2.5 Flash (Nano-Banana)", "api": "fal-ai/gemini-25-flash-image"},
+      {"name": "Ideogram 3.0", "api": "fal-ai/ideogram/v3"},
+      {"name": "HiDream-I1-Fast", "api": "fal-ai/hidream-i1-fast"}
+    ],
+    "Fantasy & Mythical": [
+      {"name": "Seedream 4.0", "api": "fal-ai/bytedance/seedream/v4/text-to-image"},
+      {"name": "Seedream 3.0", "api": "fal-ai/bytedance/seedream/v3/text-to-image"},
+      {"name": "Gemini 2.5 Flash (Nano-Banana)", "api": "fal-ai/gemini-25-flash-image"},
+      {"name": "GPT-4o", "api": "fal-ai/gpt-image-1/text-to-image/byok"},
+      {"name": "Imagen 4 Ultra Preview 0606", "api": "fal-ai/imagen4/preview/ultra"},
+      {"name": "Imagen 4 Preview 0606", "api": "fal-ai/imagen4/preview"},
+      {"name": "Qwen-Image", "api": "fal-ai/qwen-image"},
+      {"name": "Dreamina 3.1", "api": "fal-ai/bytedance/dreamina/v3.1/text-to-image"}
+    ],
+    "Futuristic & Sci-Fi": [
+      {"name": "Seedream 4.0", "api": "fal-ai/bytedance/seedream/v4/text-to-image"},
+      {"name": "FLUX.1 Kontext [max]", "api": "fal-ai/flux-pro/kontext/max"},
+      {"name": "Imagen 4 Ultra Preview 0606", "api": "fal-ai/imagen4/preview/ultra"},
+      {"name": "GPT-4o", "api": "fal-ai/gpt-image-1/text-to-image/byok"},
+      {"name": "Imagen 4 Preview 0606", "api": "fal-ai/imagen4/preview"},
+      {"name": "Gemini 2.5 Flash (Nano-Banana)", "api": "fal-ai/gemini-25-flash-image"},
+      {"name": "Seedream 3.0", "api": "fal-ai/bytedance/seedream/v3/text-to-image"},
+      {"name": "FLUX1.1 [pro] Ultra", "api": "fal-ai/flux-pro/v1.1-ultra"}
+    ],
+    "Nature & Landscapes": [
+      {"name": "Seedream 4.0", "api": "fal-ai/bytedance/seedream/v4/text-to-image"},
+      {"name": "Seedream 3.0", "api": "fal-ai/bytedance/seedream/v3/text-to-image"},
+      {"name": "Recraft V3", "api": "fal-ai/recraft/v3/text-to-image"},
+      {"name": "Gemini 2.5 Flash (Nano-Banana)", "api": "fal-ai/gemini-25-flash-image"},
+      {"name": "Dreamina 3.1", "api": "fal-ai/bytedance/dreamina/v3.1/text-to-image"},
+      {"name": "GPT-4o", "api": "fal-ai/gpt-image-1/text-to-image/byok"}
+    ],
+    "People: Groups & Activities": [
+      {"name": "Seedream 4.0", "api": "fal-ai/bytedance/seedream/v4/text-to-image"},
+      {"name": "Imagen 4 Ultra Preview 0606", "api": "fal-ai/imagen4/preview/ultra"},
+      {"name": "Imagen 4 Preview 0606", "api": "fal-ai/imagen4/preview"},
+      {"name": "Seedream 3.0", "api": "fal-ai/bytedance/seedream/v3/text-to-image"},
+      {"name": "Gemini 2.5 Flash (Nano-Banana)", "api": "fal-ai/gemini-25-flash-image"},
+      {"name": "GPT-4o", "api": "fal-ai/gpt-image-1/text-to-image/byok"},
+      {"name": "FLUX1.1 [pro] Ultra", "api": "fal-ai/flux-pro/v1.1-ultra"}
+    ],
+    "People: Portraits": [
+      {"name": "Seedream 4.0", "api": "fal-ai/bytedance/seedream/v4/text-to-image"},
+      {"name": "Seedream 3.0", "api": "fal-ai/bytedance/seedream/v3/text-to-image"},
+      {"name": "GPT-4o", "api": "fal-ai/gpt-image-1/text-to-image/byok"},
+      {"name": "Imagen 4 Ultra Preview 0606", "api": "fal-ai/imagen4/preview/ultra"},
+      {"name": "Gemini 2.5 Flash (Nano-Banana)", "api": "fal-ai/gemini-25-flash-image"},
+      {"name": "Imagen 4 Preview 0606", "api": "fal-ai/imagen4/preview"}
+    ],
+    "Physical Spaces": [
+      {"name": "Seedream 4.0", "api": "fal-ai/bytedance/seedream/v4/text-to-image"},
+      {"name": "Seedream 3.0", "api": "fal-ai/bytedance/seedream/v3/text-to-image"},
+      {"name": "Gemini 2.5 Flash (Nano-Banana)", "api": "fal-ai/gemini-25-flash-image"},
+      {"name": "Imagen 4 Ultra Preview 0606", "api": "fal-ai/imagen4/preview/ultra"},
+      {"name": "Imagen 4 Preview 0606", "api": "fal-ai/imagen4/preview"},
+      {"name": "GPT-4o", "api": "fal-ai/gpt-image-1/text-to-image/byok"},
+      {"name": "Ideogram 3.0", "api": "fal-ai/ideogram/v3"}
+    ],
+    "Text & Typography": [
+      {"name": "Imagen 4 Ultra Preview 0606", "api": "fal-ai/imagen4/preview/ultra"},
+      {"name": "Gemini 2.5 Flash (Nano-Banana)", "api": "fal-ai/gemini-25-flash-image"},
+      {"name": "Seedream 4.0", "api": "fal-ai/bytedance/seedream/v4/text-to-image"},
+      {"name": "Imagen 4 Preview 0606", "api": "fal-ai/imagen4/preview"},
+      {"name": "GPT-4o", "api": "fal-ai/gpt-image-1/text-to-image/byok"},
+      {"name": "HiDream-I1-Dev", "api": "fal-ai/hidream-i1-dev"}
+    ],
+    "UI/UX Design": [
+      {"name": "Imagen 4 Ultra Preview 0606", "api": "fal-ai/imagen4/preview/ultra"},
+      {"name": "Imagen 4 Preview 0606", "api": "fal-ai/imagen4/preview"},
+      {"name": "GPT-4o", "api": "fal-ai/gpt-image-1/text-to-image/byok"},
+      {"name": "Gemini 2.5 Flash (Nano-Banana)", "api": "fal-ai/gemini-25-flash-image"},
+      {"name": "Seedream 4.0", "api": "fal-ai/bytedance/seedream/v4/text-to-image"},
+      {"name": "Ideogram 3.0", "api": "fal-ai/ideogram/v3"},
+      {"name": "FLUX1.1 [pro] Ultra", "api": "fal-ai/flux-pro/v1.1-ultra"},
+      {"name": "HiDream-I1-Dev", "api": "fal-ai/hidream-i1-dev"},
+      {"name": "FLUX.1 Kontext [pro]", "api": "fal-ai/flux-pro/kontext"}
+    ]
+  }
+}
