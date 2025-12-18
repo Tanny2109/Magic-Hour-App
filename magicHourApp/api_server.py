@@ -413,7 +413,12 @@ async def generate_with_streaming(message: str, user_settings: dict, history: li
     settings_text = f"""[System Settings]
 Performance Mode: {mode}
 Aspect Ratio: {aspect_ratio}
-Default Images: Generate 4 image variations by default (use num_images=4). If user explicitly requests a specific number, use that instead."""
+Default Images: Generate 4 image variations by default (use num_images=4). If user explicitly requests a specific number, use that instead.
+
+IMPORTANT - Parallel Processing for Speed:
+- When editing MULTIPLE images with the SAME prompt, call fal_image_edit ONCE with comma-separated paths
+- Example: image_path="/tmp/img1.png,/tmp/img2.png,/tmp/img3.png" instead of 3 separate calls
+- This processes images in parallel and is 3-4x faster than sequential edits"""
 
     if has_previous_media:
         # Build clear image reference list with paths and original prompts
@@ -508,7 +513,12 @@ IMPORTANT: Match user references to the correct image based on content:
         settings_text = f"""[System Settings]
 Performance Mode: {mode}
 Aspect Ratio: {aspect_ratio}
-Number of Images: Generate exactly {explicit_num_images} image(s) as explicitly requested by the user (use num_images={explicit_num_images})."""
+Number of Images: Generate exactly {explicit_num_images} image(s) as explicitly requested by the user (use num_images={explicit_num_images}).
+
+IMPORTANT - Parallel Processing for Speed:
+- When editing MULTIPLE images with the SAME prompt, call fal_image_edit ONCE with comma-separated paths
+- Example: image_path="/tmp/img1.png,/tmp/img2.png,/tmp/img3.png" instead of 3 separate calls
+- This processes images in parallel and is 3-4x faster than sequential edits"""
 
     # Update the prompt for the agent (preserve context_note with image paths)
     if has_previous_media:

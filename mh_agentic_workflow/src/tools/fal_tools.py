@@ -169,45 +169,56 @@ class FalImageGenerationTool(Tool):
                 # Get model from config
                 model_id = self.models.get(model)
 
-                args = {
-                    "prompt": prompt,
-                    "image_size": {"width": width, "height": height},
-                    "num_images": num_images,
-                }
+                # Pro mode: Generate images in parallel for better performance
+                def generate_single_image(idx):
+                    """Generate a single image (for parallel execution)"""
+                    args = {
+                        "prompt": prompt,
+                        "image_size": {"width": width, "height": height},
+                        "num_images": 1,  # Generate one at a time in parallel
+                    }
+
+                    handler = fal_client.submit(model_id, arguments=args)
+                    result = handler.get()
+
+                    # Download and save image
+                    if "images" in result and result["images"]:
+                        img_url = result["images"][0].get("url")
+                        if img_url:
+                            response = requests.get(img_url)
+                            img = Image.open(BytesIO(response.content))
+
+                            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                            img.save(temp_file.name)
+                            return temp_file.name
+                    return None
 
                 # Print debug info
                 debug_info = {
                     "tool": "FalImageGenerationTool",
                     "model": model_id,
                     "model_id": model_id,
-                    "arguments": args
+                    "num_images": num_images,
+                    "parallel": True
                 }
                 print(f"\n{'='*80}")
-                print(f"DEBUG - Image Generation Tool Called:")
+                print(f"DEBUG - Image Generation Tool Called (PARALLEL):")
                 print(json.dumps(debug_info, indent=2))
                 print(f"{'='*80}\n")
 
                 st = time()
-                handler = fal_client.submit(model_id, arguments=args)
-                result = handler.get()
+                # Generate multiple images in parallel using ThreadPoolExecutor
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(num_images, 4)) as executor:
+                    futures = [executor.submit(generate_single_image, i) for i in range(num_images)]
+                    for future in concurrent.futures.as_completed(futures):
+                        try:
+                            result_path = future.result()
+                            if result_path:
+                                image_paths.append(result_path)
+                        except Exception as e:
+                            print(f"Error generating image: {e}")
                 et = time()
-                print(f"DEBUG - Image generation result: {result}")
-                print(f"DEBUG - Time taken for image generation: {et - st} seconds")
-
-                # Download and save images
-                if "images" in result:
-                    for idx, img_data in enumerate(result["images"]):
-                        img_url = img_data.get("url")
-                        if img_url:
-                            response = requests.get(img_url)
-                            img = Image.open(BytesIO(response.content))
-
-                            # Save to temp file
-                            temp_file = tempfile.NamedTemporaryFile(
-                                delete=False, suffix=".png"
-                            )
-                            img.save(temp_file.name)
-                            image_paths.append(temp_file.name)
+                print(f"DEBUG - Generated {len(image_paths)} images in parallel in {et - st:.2f} seconds")
 
             result_msg = f"Generated {len(image_paths)} image(s): {', '.join(image_paths)}"
             print(result_msg)
@@ -323,16 +334,22 @@ class FalVideoGenerationTool(Tool):
 
 class FalImageEditTool(Tool):
     """Tool for editing images using fal.ai models"""
-    
+
     name = "fal_image_edit"
     description = """
     Edits or modifies existing images using fal.ai models.
     Use this tool when the user wants to edit, modify, or transform an uploaded image.
+
+    IMPORTANT: When user wants to edit multiple images (e.g., "add cats to all images"),
+    call this tool ONCE with all comma-separated image paths instead of calling it multiple times.
+    This enables parallel processing for much faster results.
+
+    Example: image_path = "/tmp/img1.png,/tmp/img2.png,/tmp/img3.png"
     """
     inputs = {
         "image_path": {
             "type": "string",
-            "description": "Path to the image file to edit"
+            "description": "Path to the image file(s) to edit. For multiple images, provide comma-separated paths."
         },
         "prompt": {
             "type": "string",
@@ -347,71 +364,98 @@ class FalImageEditTool(Tool):
     output_type = "string"
 
     def forward(self, image_path: str, prompt: str, strength: float = 0.8) -> str:
-        """Edit image using fal.ai
+        """Edit image(s) using fal.ai with parallel processing
 
         Args:
-            image_path: Path to the image file
+            image_path: Path to image file(s). Comma-separated for multiple images.
             prompt: Description of edits to apply
             strength: Edit strength (0.0-1.0)
 
         Returns:
-            String with edited image path or error message
+            String with edited image path(s) or error message
         """
         try:
+            # Parse image paths (support comma-separated)
+            image_paths = [p.strip() for p in image_path.split(',') if p.strip()]
+            num_images = len(image_paths)
+
             # Get model from config
             # model_id = "fal-ai/nano-banana/edit" #13.2s
             model_id = "fal-ai/bytedance/seedream/v4/edit" #13.16s
 
-            # Upload image to fal.ai (manual upload required)
-            with open(image_path, 'rb') as f:
-                image_data = f.read()
-            image_url = fal_client.upload(image_data, "image/png")
+            def edit_single_image(img_path):
+                """Edit a single image (for parallel execution)"""
+                # Upload image to fal.ai
+                with open(img_path, 'rb') as f:
+                    image_data = f.read()
+                image_url = fal_client.upload(image_data, "image/png")
 
-            args = {
-                "image_urls": [image_url],
-                "prompt": prompt,
-                # "strength": strength,
-                "width": 1024,
-                "height": 1024
-            }
+                args = {
+                    "image_urls": [image_url],
+                    "prompt": prompt,
+                    # "strength": strength,
+                    "width": 1024,
+                    "height": 1024
+                }
+
+                handler = fal_client.submit(model_id, arguments=args)
+                result = handler.get()
+
+                if "images" in result and result["images"]:
+                    edited_url = result["images"][0].get("url")
+
+                    # Download edited image
+                    response = requests.get(edited_url)
+                    img = Image.open(BytesIO(response.content))
+
+                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                    img.save(temp_file.name)
+                    return temp_file.name
+
+                return None
 
             # Print debug info
             debug_info = {
                 "tool": "FalImageEditTool",
                 "model_id": model_id,
-                "arguments": {
-                    "prompt": prompt,
-                    "image_url": image_url[:50] + "..."
-                }
+                "num_images": num_images,
+                "parallel": num_images > 1,
+                "prompt": prompt
             }
             print(f"\n{'='*80}")
-            print(f"DEBUG - Image Edit Tool Called:")
+            print(f"DEBUG - Image Edit Tool Called (PARALLEL={num_images > 1}):")
             print(json.dumps(debug_info, indent=2))
             print(f"{'='*80}\n")
 
-            st= time()
-            handler = fal_client.submit(model_id, arguments=args)
-            result = handler.get()
+            st = time()
+            edited_paths = []
+
+            if num_images == 1:
+                # Single image - no need for parallelization
+                result_path = edit_single_image(image_paths[0])
+                if result_path:
+                    edited_paths.append(result_path)
+            else:
+                # Multiple images - use parallel processing
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(num_images, 4)) as executor:
+                    futures = [executor.submit(edit_single_image, img_path) for img_path in image_paths]
+                    for future in concurrent.futures.as_completed(futures):
+                        try:
+                            result_path = future.result()
+                            if result_path:
+                                edited_paths.append(result_path)
+                        except Exception as e:
+                            print(f"Error editing image: {e}")
+
             et = time()
-            print(f"DEBUG - Time taken for image editing: {et - st} seconds")
-            print(f"DEBUG - Image editing result: {result}")
+            print(f"DEBUG - Edited {len(edited_paths)} image(s) in {et - st:.2f} seconds (avg: {(et-st)/len(edited_paths):.2f}s per image)")
 
-            if "images" in result and result["images"]:
-                edited_url = result["images"][0].get("url")
-
-                # Download edited image
-                response = requests.get(edited_url)
-                img = Image.open(BytesIO(response.content))
-
-                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-                img.save(temp_file.name)
-
-                result_msg = f"Edited image saved to: {temp_file.name}"
+            if edited_paths:
+                result_msg = f"Edited {len(edited_paths)} image(s): {', '.join(edited_paths)}"
                 print(result_msg)
                 return result_msg
-
-            # Return mock response for testing (uncomment API calls above when ready)
-            # return f"[MOCK] Would edit image with prompt '{prompt}' using model '{model_id}'"
+            else:
+                return "Error: No images were successfully edited"
 
         except Exception as e:
             return f"Error editing image: {str(e)}"
