@@ -299,24 +299,24 @@ async def generate_reflection_with_llm(message: str, image_paths: list, video_pa
     
     reasoning_summary = "\n".join(reasoning_summary_parts) if reasoning_summary_parts else "- Generated image"
     
-    reflection_prompt = f"""You are an AI image/video generation assistant. You just completed a generation task.
+    reflection_prompt = f"""Look at this image that was just generated for the request: "{message}"
 
-Original request: "{message}"
-Mode: {mode}
-Time taken: {total_time:.1f} seconds
+What do you notice? Share 2-3 sentences about:
+- What stands out visually
+- What's working well
+- One specific idea to try if they want to iterate
 
-Key steps:
-{reasoning_summary}
+Be casual and direct. Start right away with your observation - no introductions.
 
-The generated image/video is attached for your review.
+Examples:
+"The lighting really creates a dramatic mood here - love how the shadows play off the subject. The composition feels balanced but you could try a tighter crop to make it more intimate."
 
-Provide a concise 1-2 sentence conversational reflection on the result. Comment on what worked well, the visual quality, or suggest what the user could try next. Be friendly and encouraging.
+"Nice color palette, the warm tones give it an inviting vibe. The focus is sharp on the main element. If you want more depth, try adding some blur to the background or play with different times of day."
 
-Example: "The warm golden tones really capture that magical hour feeling. The composition balances all elements harmoniously - feel free to ask for adjustments!"
-
-Your reflection:"""
+Now look at the attached image and share your thoughts:"""
     
     try:
+        import fal_client
         from smolagents.models import ChatMessage, MessageRole
 
         # Build message with image attachment
@@ -328,18 +328,29 @@ Your reflection:"""
             # For videos, we can't send directly to most LLMs, so describe it
             message_content.append({"type": "text", "text": f"\n[Video generated at: {first_media}]"})
         else:
-            # For images, include the image for visual analysis
-            message_content.append({"type": "image_url", "image_url": {"url": f"file://{first_media}"}})
+            # For images, upload to fal.ai first so the LLM can actually see it
+            try:
+                with open(first_media, 'rb') as f:
+                    image_data = f.read()
+                # Upload to fal.ai and get public URL
+                uploaded_image_url = fal_client.upload(image_data, "image/png")
+                message_content.append({"type": "image_url", "image_url": {"url": uploaded_image_url}})
+                print(f"DEBUG - Uploaded image for reflection: {uploaded_image_url}")
+            except Exception as upload_error:
+                print(f"Error uploading image for reflection: {upload_error}")
+                # Fallback to local path (won't work but better than crashing)
+                message_content.append({"type": "image_url", "image_url": {"url": f"file://{first_media}"}})
 
         messages = [ChatMessage(role=MessageRole.USER, content=message_content)]
 
-        # Use a simple reflection-specific system prompt (not the agent tools prompt)
-        reflection_system = "You are a friendly AI assistant that provides brief, encouraging reflections on generated images and videos. Keep responses conversational and under 2 sentences."
+        # Use a casual, conversational system prompt
+        reflection_system = """You're a friendly creative giving quick feedback on AI-generated images. Jump straight into your observations - no greetings,
+no "I'm here to help" stuff. Just look at the image and share what you see in 3-4 casual sentences. Be specific and helpful and talk like a friend."""
 
         response = agent_app.model.generate(
             messages,
-            max_tokens=200,
-            temperature=0.7,
+            max_tokens=250,
+            temperature=0.8,
             system_prompt=reflection_system
         )
         return response.content.strip()
