@@ -2,10 +2,46 @@ import { useState, useRef, useEffect } from 'react'
 import './App.css'
 import ChatMessage from './components/ChatMessage'
 
-// Use environment variable or detect based on development mode
-// In dev: localhost:8000, In production: same origin as frontend
-const API_URL = import.meta.env.VITE_API_URL ||
-  (import.meta.env.DEV ? 'http://localhost:8000' : window.location.origin)
+// API URL configuration
+// In production (window.location.protocol !== 'http:' on localhost), use same origin
+// In development, use localhost:8000
+const getApiUrl = () => {
+  // Check if VITE_API_URL is explicitly set
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL
+  }
+
+  // If running on localhost (development), use localhost:8000
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return 'http://localhost:8000'
+  }
+
+  // Otherwise (production), use the same origin as the frontend
+  return window.location.origin
+}
+
+const API_URL = getApiUrl()
+
+// Debug: Log API URL in production
+if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+  console.log('🔗 API URL:', API_URL)
+}
+
+// Helper to convert relative URLs to absolute in development
+const toAbsoluteUrl = (url) => {
+  // If URL is already absolute (starts with http:// or https://), return as-is
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    return url
+  }
+
+  // If URL is relative and we're in development, prepend API_URL
+  if (url.startsWith('/') && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+    return `${API_URL}${url}`
+  }
+
+  // Otherwise (production with relative URL), return as-is (browser will resolve)
+  return url
+}
 
 function App() {
   const [messages, setMessages] = useState([])
@@ -175,9 +211,10 @@ function App() {
         setMessages(prev => {
           const updated = prev.map(msg => {
             if (msg.id === msgId) {
+              const absoluteUrl = toAbsoluteUrl(data.url)
               const newMsg = {
                 ...msg,
-                images: [...(msg.images || []), data.url],
+                images: [...(msg.images || []), absoluteUrl],
                 isGeneratingImage: false,
                 isLoading: false
               }
@@ -196,7 +233,7 @@ function App() {
           msg.id === msgId
             ? {
                 ...msg,
-                videos: [...(msg.videos || []), data.url],
+                videos: [...(msg.videos || []), toAbsoluteUrl(data.url)],
                 isLoading: false
               }
             : msg

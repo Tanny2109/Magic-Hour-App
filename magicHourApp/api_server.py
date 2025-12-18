@@ -576,7 +576,7 @@ Number of Images: Generate exactly {explicit_num_images} image(s) as explicitly 
                         if thumbnail:
                             yield SSEEvent.format("image_preview", {"blur_data": thumbnail})
                             await asyncio.sleep(0.05)
-                        yield SSEEvent.format("image_complete", {"url": f"http://localhost:8000/api/media?path={img_path}"})
+                        yield SSEEvent.format("image_complete", {"url": f"/api/media?path={img_path}"})
                         await asyncio.sleep(0.05)
 
                 new_videos = parse_video_paths(observation)
@@ -584,7 +584,7 @@ Number of Images: Generate exactly {explicit_num_images} image(s) as explicitly 
                     if vid_path not in video_paths:
                         video_paths.append(vid_path)
                         yield SSEEvent.format("reasoning", {"content": "✅ Video generated successfully"})
-                        yield SSEEvent.format("video_complete", {"url": f"http://localhost:8000/api/media?path={vid_path}"})
+                        yield SSEEvent.format("video_complete", {"url": f"/api/media?path={vid_path}"})
                         await asyncio.sleep(0.05)
 
         elif step_type == 'FinalAnswerStep':
@@ -595,7 +595,7 @@ Number of Images: Generate exactly {explicit_num_images} image(s) as explicitly 
                 for img_path in final_images:
                     if img_path not in image_paths:
                         image_paths.append(img_path)
-                        yield SSEEvent.format("image_complete", {"url": f"http://localhost:8000/api/media?path={img_path}"})
+                        yield SSEEvent.format("image_complete", {"url": f"/api/media?path={img_path}"})
 
                 # Send text response to UI (agent's message to user)
                 # Remove image paths from text to get clean message
