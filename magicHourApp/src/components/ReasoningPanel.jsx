@@ -25,22 +25,9 @@ function ReasoningPanel({ steps, isLive }) {
               </span>
               <div className="step-content">
                 {step.type === 'tool' ? (
-                  <>
-                    <strong>Using: {step.name}</strong>
-                    {step.args && (
-                      <pre style={{ 
-                        fontSize: '0.8rem', 
-                        marginTop: '6px', 
-                        opacity: 0.7,
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word'
-                      }}>
-                        {typeof step.args === 'string' ? step.args : JSON.stringify(step.args, null, 2)}
-                      </pre>
-                    )}
-                  </>
+                  <strong>{step.name}</strong>
                 ) : (
-                  <span>{step.content}</span>
+                  <span style={{ whiteSpace: 'pre-wrap' }}>{step.content}</span>
                 )}
               </div>
             </div>

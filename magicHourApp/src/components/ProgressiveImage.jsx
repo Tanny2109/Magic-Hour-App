@@ -1,27 +1,57 @@
 import { useState } from 'react'
 
-function ProgressiveImage({ src, alt }) {
+function ProgressiveImage({ src, alt, blurPreview, disableExpand = false }) {
   const [isLoaded, setIsLoaded] = useState(false)
   const [isExpanded, setIsExpanded] = useState(false)
 
+  const handleClick = (e) => {
+    if (disableExpand) return
+    e.stopPropagation()
+    setIsExpanded(true)
+  }
+
   return (
     <>
-      <div 
+      <div
         className={`progressive-image ${isLoaded ? '' : 'loading'}`}
-        onClick={() => setIsExpanded(true)}
-        style={{ cursor: 'pointer' }}
+        onDoubleClick={handleClick}
+        style={{ cursor: disableExpand ? 'pointer' : 'zoom-in', position: 'relative' }}
       >
-        {!isLoaded && (
+        {/* ChatGPT-style blur preview */}
+        {blurPreview && !isLoaded && (
+          <img
+            src={blurPreview}
+            alt="Loading preview"
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: '100%',
+              filter: 'blur(20px)',
+              transform: 'scale(1.1)',
+              objectFit: 'cover',
+              borderRadius: 'var(--radius-md)'
+            }}
+          />
+        )}
+
+        {/* Shimmer fallback if no blur preview */}
+        {!isLoaded && !blurPreview && (
           <div className="placeholder shimmer" style={{ minHeight: '200px', minWidth: '200px' }}>
           </div>
         )}
+
+        {/* Full resolution image */}
         <img
           src={src}
           alt={alt}
           onLoad={() => setIsLoaded(true)}
-          style={{ 
+          style={{
             opacity: isLoaded ? 1 : 0,
-            transition: 'opacity 0.5s ease'
+            transition: 'opacity 0.5s ease',
+            position: 'relative',
+            display: 'block'
           }}
         />
       </div>

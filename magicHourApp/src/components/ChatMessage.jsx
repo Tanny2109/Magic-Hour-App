@@ -1,8 +1,18 @@
 import ProgressiveImage from './ProgressiveImage'
 import ReasoningPanel from './ReasoningPanel'
 
-function ChatMessage({ message, reasoning }) {
-  const { role, content, images, videos, description, isLoading, isGeneratingImage } = message
+function ChatMessage({ message, reasoning, selectedImage, onImageSelect }) {
+  const { role, content, images, videos, description, isLoading, isGeneratingImage, reflection, imagePreviews, enhancedPrompt, finalReasoning, id } = message
+
+  const handleImageClick = (idx, url) => {
+    if (onImageSelect) {
+      onImageSelect({ msgId: id, imageIndex: idx, url })
+    }
+  }
+
+  const isSelected = (idx) => {
+    return selectedImage?.msgId === id && selectedImage?.imageIndex === idx
+  }
 
   return (
     <div className={`message ${role}`}>
@@ -10,52 +20,74 @@ function ChatMessage({ message, reasoning }) {
         {role === 'user' ? '👤' : '✨'}
       </div>
       <div className="message-content">
-        {/* Text content */}
         {content && <div className="text-content">{content}</div>}
-        
-        {/* Loading state with reasoning */}
-        {isLoading && !isGeneratingImage && !images?.length && (
-          <>
-            <div className="typing-indicator">
-              <span></span>
-              <span></span>
-              <span></span>
-            </div>
-            {reasoning && reasoning.length > 0 && (
-              <ReasoningPanel steps={reasoning} isLive={true} />
-            )}
-          </>
+
+        {enhancedPrompt && (
+          <div className="enhanced-prompt">
+            <div className="enhanced-label">Enhanced Prompt</div>
+            <div className="enhanced-text">{enhancedPrompt}</div>
+          </div>
         )}
 
-        {/* Generating image state */}
+        {finalReasoning && finalReasoning.length > 0 && (
+          <ReasoningPanel steps={finalReasoning} isLive={isLoading} />
+        )}
+
+        {isLoading && !images?.length && !videos?.length && (
+          <div className="typing-indicator">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        )}
+
         {isGeneratingImage && (
           <div className="progressive-image loading">
             <div className="placeholder">
               <div className="spinner"></div>
-              <span>Generating image...</span>
+              <span>Generating images...</span>
             </div>
           </div>
         )}
 
-        {/* Images */}
-        {images && images.map((url, idx) => (
-          <ProgressiveImage key={idx} src={url} alt={`Generated image ${idx + 1}`} />
-        ))}
+        {/* Images in a horizontal row */}
+        {images && images.length > 0 && (
+          <div className={`image-grid ${images.length > 1 ? 'multi' : ''}`}>
+            {images.map((url, idx) => (
+              <div
+                key={idx}
+                className={`image-grid-item ${isSelected(idx) ? 'selected' : ''}`}
+                onClick={() => handleImageClick(idx, url)}
+              >
+                <div className="image-index">V{idx + 1}</div>
+                <ProgressiveImage
+                  src={url}
+                  alt={`Variation ${idx + 1}`}
+                  blurPreview={imagePreviews?.[idx]}
+                  disableExpand={true}
+                />
+                {isSelected(idx) && <div className="selected-badge">✓ Selected</div>}
+              </div>
+            ))}
+          </div>
+        )}
 
-        {/* Videos */}
         {videos && videos.map((url, idx) => (
           <div key={idx} className="video-container">
             <video controls autoPlay loop muted>
               <source src={url} type="video/mp4" />
-              Your browser does not support the video tag.
             </video>
           </div>
         ))}
 
-        {/* Conversational description */}
         {description && (
-          <div className="image-description">
-            💬 {description}
+          <div className="image-description">💬 {description}</div>
+        )}
+
+        {reflection && (
+          <div className="agent-reflection">
+            <div className="reflection-icon">✨</div>
+            <div className="reflection-text">{reflection}</div>
           </div>
         )}
       </div>

@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect } from 'react'
 import './App.css'
 import ChatMessage from './components/ChatMessage'
-import ReasoningPanel from './components/ReasoningPanel'
 
-const API_URL = 'http://localhost:8000'
+// Use environment variable or detect based on development mode
+// In dev: localhost:8000, In production: same origin as frontend
+const API_URL = import.meta.env.VITE_API_URL ||
+  (import.meta.env.DEV ? 'http://localhost:8000' : window.location.origin)
 
 function App() {
   const [messages, setMessages] = useState([])
@@ -15,6 +17,7 @@ function App() {
     mode: 'fast',
     aspectRatio: 'square'
   })
+  const [selectedImage, setSelectedImage] = useState(null) // {msgId, imageIndex, url}
   const messagesEndRef = useRef(null)
 
   const scrollToBottom = () => {
@@ -39,13 +42,16 @@ function App() {
 
     // Add assistant placeholder
     const assistantMsgId = Date.now()
-    setMessages(prev => [...prev, { 
-      role: 'assistant', 
+    setMessages(prev => [...prev, {
+      role: 'assistant',
       id: assistantMsgId,
       content: '',
       images: [],
       videos: [],
       description: '',
+      reflection: '',
+      enhancedPrompt: '',
+      finalReasoning: [],
       isLoading: true
     }])
 
@@ -58,15 +64,24 @@ function App() {
         videos: msg.videos || []
       }))
 
+      // Include selected image reference if user has selected one
+      let messageWithContext = userMessage
+      if (selectedImage) {
+        messageWithContext = `[User selected image V${selectedImage.imageIndex + 1}]\n${userMessage}`
+      }
+
       const response = await fetch(`${API_URL}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: userMessage,
-          settings: settings,
+          message: messageWithContext,
+          settings: { ...settings, selectedImage: selectedImage },
           history: historyForContext
         })
       })
+
+      // Clear selection after sending
+      setSelectedImage(null)
 
       if (!response.ok) throw new Error('Failed to connect to server')
 
@@ -108,48 +123,79 @@ function App() {
   const handleSSEEvent = (data, msgId) => {
     switch (data.type) {
       case 'reasoning':
-        setCurrentReasoning(prev => [...prev, { 
-          type: 'thought', 
+        const reasoningStep = {
+          type: 'thought',
           content: data.content,
           timestamp: Date.now()
-        }])
+        }
+        setCurrentReasoning(prev => [...prev, reasoningStep])
+        setMessages(prev => prev.map(msg =>
+          msg.id === msgId
+            ? { ...msg, finalReasoning: [...(msg.finalReasoning || []), reasoningStep] }
+            : msg
+        ))
         break
 
       case 'tool_call':
-        setCurrentReasoning(prev => [...prev, { 
-          type: 'tool', 
+        const toolStep = {
+          type: 'tool',
           name: data.tool,
-          args: data.args,
           timestamp: Date.now()
-        }])
+        }
+        setCurrentReasoning(prev => [...prev, toolStep])
+        setMessages(prev => prev.map(msg =>
+          msg.id === msgId
+            ? { ...msg, finalReasoning: [...(msg.finalReasoning || []), toolStep] }
+            : msg
+        ))
+        break
+
+      case 'image_preview':
+        // Add blur thumbnail for progressive loading
+        setMessages(prev => prev.map(msg =>
+          msg.id === msgId
+            ? {
+                ...msg,
+                imagePreviews: [...(msg.imagePreviews || []), data.blur_data]
+              }
+            : msg
+        ))
         break
 
       case 'image_progress':
-        setMessages(prev => prev.map(msg => 
-          msg.id === msgId 
+        setMessages(prev => prev.map(msg =>
+          msg.id === msgId
             ? { ...msg, isGeneratingImage: true }
             : msg
         ))
         break
 
       case 'image_complete':
-        setMessages(prev => prev.map(msg => 
-          msg.id === msgId 
-            ? { 
-                ...msg, 
+        console.log('📸 Image complete:', data.url)
+        setMessages(prev => {
+          const updated = prev.map(msg => {
+            if (msg.id === msgId) {
+              const newMsg = {
+                ...msg,
                 images: [...(msg.images || []), data.url],
                 isGeneratingImage: false,
                 isLoading: false
               }
-            : msg
-        ))
+              console.log('✅ Updated message with image:', newMsg.images)
+              return newMsg
+            }
+            return msg
+          })
+          console.log('📋 All messages:', updated)
+          return updated
+        })
         break
 
       case 'video_complete':
-        setMessages(prev => prev.map(msg => 
-          msg.id === msgId 
-            ? { 
-                ...msg, 
+        setMessages(prev => prev.map(msg =>
+          msg.id === msgId
+            ? {
+                ...msg,
                 videos: [...(msg.videos || []), data.url],
                 isLoading: false
               }
@@ -157,25 +203,56 @@ function App() {
         ))
         break
 
+      case 'interpretation':
+        // Not displayed
+        break
+
       case 'description':
-        setMessages(prev => prev.map(msg => 
-          msg.id === msgId 
+        setMessages(prev => prev.map(msg =>
+          msg.id === msgId
             ? { ...msg, description: data.content, isLoading: false }
             : msg
         ))
         break
 
-      case 'complete':
-        setMessages(prev => prev.map(msg => 
-          msg.id === msgId 
-            ? { ...msg, isLoading: false }
+      case 'reflection':
+        setMessages(prev => prev.map(msg =>
+          msg.id === msgId
+            ? { ...msg, reflection: data.content }
             : msg
         ))
         break
 
+      case 'enhanced_prompt':
+        setMessages(prev => prev.map(msg =>
+          msg.id === msgId
+            ? { ...msg, enhancedPrompt: data.enhanced, originalPrompt: data.original }
+            : msg
+        ))
+        break
+
+      case 'agent_message':
+        // Agent's text response (shown as message content)
+        setMessages(prev => prev.map(msg =>
+          msg.id === msgId
+            ? { ...msg, content: data.content }
+            : msg
+        ))
+        break
+
+      case 'complete':
+        // Mark generation as complete
+        setMessages(prev => prev.map(msg =>
+          msg.id === msgId
+            ? { ...msg, isLoading: false, isGeneratingImage: false }
+            : msg
+        ))
+        setIsLoading(false)
+        break
+
       case 'error':
-        setMessages(prev => prev.map(msg => 
-          msg.id === msgId 
+        setMessages(prev => prev.map(msg =>
+          msg.id === msgId
             ? { ...msg, content: `Error: ${data.message}`, isLoading: false }
             : msg
         ))
@@ -204,10 +281,12 @@ function App() {
           )}
           
           {messages.map((msg, idx) => (
-            <ChatMessage 
-              key={msg.id || idx} 
+            <ChatMessage
+              key={msg.id || idx}
               message={msg}
               reasoning={msg.role === 'assistant' && msg.isLoading ? currentReasoning : null}
+              selectedImage={selectedImage}
+              onImageSelect={setSelectedImage}
             />
           ))}
           <div ref={messagesEndRef} />
@@ -254,7 +333,7 @@ function App() {
               </div>
               <div className="setting-item">
                 <label>Aspect Ratio</label>
-                <select 
+                <select
                   value={settings.aspectRatio}
                   onChange={(e) => setSettings({...settings, aspectRatio: e.target.value})}
                 >
