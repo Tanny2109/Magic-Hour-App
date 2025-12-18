@@ -23,7 +23,6 @@ from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-
 class FalAIModel(Model):
     """
     A Model implementation that uses fal.ai's API for inference.
@@ -84,60 +83,112 @@ class FalAIModel(Model):
 
     def _convert_messages_to_fal_format(
         self,
-        messages: list[ChatMessage | dict]
-    ) -> tuple[str, str | None]:
+        messages: list[ChatMessage | dict],
+        override_system_prompt: str | None = None
+    ) -> tuple[str | list, str | None]:
         """
-        Convert smolagents message list to fal.ai format.
+        Convert smolagents message list to fal.ai format with multimodal support.
 
         Args:
             messages: List of ChatMessage objects or dicts from smolagents
+            override_system_prompt: If provided, use this instead of default AGENT_INFO
 
         Returns:
-            tuple: (prompt, system_prompt) for fal.ai API
+            tuple: (prompt_or_messages, system_prompt) for fal.ai API
+                   prompt_or_messages can be a string for text-only or a list for multimodal
         """
         # Clean and standardize messages
         clean_messages = get_clean_message_list(messages)
 
-        system_prompt = settings.AGENT_INFO
+        # Use override if provided, otherwise default to AGENT_INFO
+        system_prompt = override_system_prompt if override_system_prompt is not None else settings.AGENT_INFO
         user_messages = []
+        has_images = False
 
         for msg in clean_messages:
             role = msg["role"]
             content = msg["content"]
 
-            # Extract text content
+            # Handle multimodal content (list with text and images)
             if isinstance(content, list):
-                text_parts = [
-                    item.get("text", "")
-                    for item in content
-                    if isinstance(item, dict) and item.get("type") == "text"
-                ]
-                content_text = "\n".join(text_parts)
+                message_parts = []
+                for item in content:
+                    if not isinstance(item, dict):
+                        continue
+                        
+                    item_type = item.get("type")
+                    
+                    if item_type == "text":
+                        text_content = item.get("text", "")
+                        if text_content:
+                            message_parts.append({"type": "text", "text": text_content})
+                    
+                    elif item_type == "image_url":
+                        # Extract image URL from the nested structure
+                        image_url_data = item.get("image_url", {})
+                        if isinstance(image_url_data, dict):
+                            image_url = image_url_data.get("url", "")
+                        else:
+                            image_url = str(image_url_data)
+                        
+                        if image_url:
+                            has_images = True
+                            # Convert file:// URLs to local paths for fal.ai
+                            if image_url.startswith("file://"):
+                                image_url = image_url[7:]  # Remove file:// prefix
+                            
+                            message_parts.append({"type": "image_url", "image_url": image_url})
+                
+                # Build message with role prefix
+                if message_parts:
+                    if role == "system":
+                        # For system messages, extract text only and add to system_prompt
+                        text_parts = [p["text"] for p in message_parts if p.get("type") == "text"]
+                        if text_parts:
+                            content_text = "\n".join(text_parts)
+                            if system_prompt is None:
+                                system_prompt = content_text
+                            else:
+                                system_prompt += "\n" + content_text
+                    else:
+                        user_messages.append({"role": role, "content": message_parts})
             else:
+                # Simple text content
                 content_text = str(content)
-
-            # Separate system prompts from user/assistant messages
-            if role == "system":
-                if system_prompt is None:
-                    system_prompt = content_text
+                
+                if role == "system":
+                    if system_prompt is None:
+                        system_prompt = content_text
+                    else:
+                        system_prompt += "\n" + content_text
                 else:
-                    system_prompt += "\n" + content_text
-            elif role == "user":
-                user_messages.append(f"User: {content_text}")
-            elif role == "assistant":
-                user_messages.append(f"Assistant: {content_text}")
+                    user_messages.append({"role": role, "content": content_text})
 
-        # Combine all messages into a single prompt
-        prompt = "\n\n".join(user_messages)
-
+        # If we have images, return structured messages list for multimodal support
+        if has_images:
+            return user_messages, system_prompt
+        
+        # Otherwise, flatten to simple prompt string (backward compatible)
+        prompt_parts = []
+        for msg in user_messages:
+            role = msg["role"]
+            content = msg["content"]
+            if isinstance(content, str):
+                prompt_parts.append(f"{role.capitalize()}: {content}")
+            elif isinstance(content, list):
+                text_parts = [p.get("text", "") for p in content if p.get("type") == "text"]
+                if text_parts:
+                    prompt_parts.append(f"{role.capitalize()}: {' '.join(text_parts)}")
+        
+        prompt = "\n\n".join(prompt_parts)
         return prompt, system_prompt
-
     def generate(
         self,
         messages: list[ChatMessage | dict],
         stop_sequences: list[str] | None = None,
         response_format: dict[str, str] | None = None,
         tools_to_call_from: list[Tool] | None = None,
+        system_prompt: str | None = None,
         **kwargs,
     ) -> ChatMessage:
         """
@@ -148,24 +199,36 @@ class FalAIModel(Model):
             stop_sequences: Not supported by fal.ai (ignored)
             response_format: Not supported by fal.ai (ignored)
             tools_to_call_from: Not supported by fal.ai (ignored)
+            system_prompt: Optional system prompt override (skips default AGENT_INFO)
             **kwargs: Additional parameters for fal.ai API
 
         Returns:
             ChatMessage: The model's response wrapped in smolagents format
         """
-        # Convert messages to fal.ai format
-        prompt, system_prompt = self._convert_messages_to_fal_format(messages)
+        # Convert messages to fal.ai format (can be string or list for multimodal)
+        prompt_or_messages, resolved_system_prompt = self._convert_messages_to_fal_format(
+            messages, override_system_prompt=system_prompt
+        )
 
         # Prepare fal.ai request
         fal_input = {
-            "prompt": prompt,
             "model": self.fal_model_name,
             "temperature": kwargs.get("temperature", self.temperature),
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
         }
 
-        if system_prompt:
-            fal_input["system_prompt"] = system_prompt
+        # Handle multimodal vs text-only
+        if isinstance(prompt_or_messages, list):
+            # Multimodal: use messages array
+            fal_input["messages"] = prompt_or_messages
+            # fal.ai requires prompt field even with messages
+            fal_input["prompt"] = ""
+        else:
+            # Text-only: use prompt string
+            fal_input["prompt"] = prompt_or_messages
+
+        if resolved_system_prompt:
+            fal_input["system_prompt"] = resolved_system_prompt
 
         # Add any additional kwargs
         for key, value in kwargs.items():
@@ -199,7 +262,6 @@ class FalAIModel(Model):
         except Exception as e:
             logger.error(f"Error calling fal.ai API: {e}")
             raise
-
     def generate_stream(
         self,
         messages: list[ChatMessage | dict],
@@ -221,16 +283,25 @@ class FalAIModel(Model):
         Yields:
             ChatMessageStreamDelta: Streaming response chunks
         """
-        # Convert messages to fal.ai format
-        prompt, system_prompt = self._convert_messages_to_fal_format(messages)
+        # Convert messages to fal.ai format (can be string or list for multimodal)
+        prompt_or_messages, system_prompt = self._convert_messages_to_fal_format(messages)
 
         # Prepare fal.ai request
         fal_input = {
-            "prompt": prompt,
             "model": self.fal_model_name,
             "temperature": kwargs.get("temperature", self.temperature),
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
         }
+
+        # Handle multimodal vs text-only
+        if isinstance(prompt_or_messages, list):
+            # Multimodal: use messages array
+            fal_input["messages"] = prompt_or_messages
+            # fal.ai requires prompt field even with messages
+            fal_input["prompt"] = ""
+        else:
+            # Text-only: use prompt string
+            fal_input["prompt"] = prompt_or_messages
 
         if system_prompt:
             fal_input["system_prompt"] = system_prompt

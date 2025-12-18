@@ -121,55 +121,50 @@ class FalImageGenerationTool(Tool):
         mode: str = "fast",
         image_type: str = "general"
     ) -> str:
-        """Generate images using fal.ai
-
-        Args:
-            prompt: Text description of the image
-            model: Model identifier (ignored - uses config mode instead)
-            width: Image width in pixels
-            height: Image height in pixels
-            num_images: Number of images to generate
-
-        Returns:
-            String describing the generated images and their paths
-        """
+        """Generate images using fal.ai"""
         try:
             image_paths = []
             if mode=="fast" or model == "flux-schnell" or model == "flux_krea" or model == "flux-krea":
-                job = {
-                    "type": "inference.flux-fast.schnell.txt2img.v2",
-                    "config": {
-                        "prompt": prompt,
-                        "width": width,
-                        "height": height,
-                        "steps": 4
-                    }
-                }
+                import concurrent.futures
+
                 # Print debug info
                 debug_info = {
                     "tool": "FalImageGenerationTool",
                     "mode": mode,
+                    "num_images": num_images
                 }
                 print(f"\n{'='*80}")
                 print(f"DEBUG - Image Generation Tool Called:")
                 print(json.dumps(debug_info, indent=2))
                 print(f"{'='*80}\n")
+
+                def generate_single_image(idx):
+                    job = {
+                        "type": "inference.flux-fast.schnell.txt2img.v2",
+                        "config": {
+                            "prompt": prompt,
+                            "width": width,
+                            "height": height,
+                            "steps": 4
+                        }
+                    }
+                    res = session.post(prodia_url, headers=headers, json=job)
+                    img = Image.open(BytesIO(res.content))
+                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                    img.save(temp_file.name)
+                    return temp_file.name
+
                 st = time()
-                res = session.post(prodia_url, headers=headers, json=job)
+                # Generate multiple images in parallel for speed
+                with concurrent.futures.ThreadPoolExecutor(max_workers=num_images) as executor:
+                    futures = [executor.submit(generate_single_image, i) for i in range(num_images)]
+                    for future in concurrent.futures.as_completed(futures):
+                        try:
+                            image_paths.append(future.result())
+                        except Exception as e:
+                            print(f"Error generating image: {e}")
                 et = time()
-                # print(f"Request ID: {res.headers.get('x-request-id')}")
-                # print(f"Status: {res.status_code}")
-                print(f"DEBUG - Time taken for image generation: {et - st} seconds")
-                # if res.status_code != 200:
-                #     print(res.text)
-                #     sys.exit(1)
-                img = Image.open(BytesIO(res.content))
-                # img = res.content
-                temp_file = tempfile.NamedTemporaryFile(
-                    delete=False, suffix=".png"
-                )
-                img.save(temp_file.name)
-                image_paths.append(temp_file.name)
+                print(f"DEBUG - Generated {len(image_paths)} images in {et - st:.2f} seconds")
             else:
                 # Get model from config
                 model_id = self.models.get(model)
@@ -214,7 +209,9 @@ class FalImageGenerationTool(Tool):
                             img.save(temp_file.name)
                             image_paths.append(temp_file.name)
 
-            return f"Generated {len(image_paths)} image(s): {', '.join(image_paths)}"
+            result_msg = f"Generated {len(image_paths)} image(s): {', '.join(image_paths)}"
+            print(result_msg)
+            return result_msg
 
         except Exception as e:
             return f"Error generating images: {str(e)}"
@@ -313,7 +310,9 @@ class FalVideoGenerationTool(Tool):
                 temp_file.write(response.content)
                 temp_file.close()
 
-                return f"Generated video saved to: {temp_file.name}"
+                result_msg = f"Generated video saved to: {temp_file.name}"
+                print(result_msg)
+                return result_msg
 
             # # Return mock response for testing (uncomment API calls above when ready)
             # return f"[MOCK] Would generate {duration}s video using model '{model_id}' in {mode} mode"
@@ -407,7 +406,9 @@ class FalImageEditTool(Tool):
                 temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
                 img.save(temp_file.name)
 
-                return f"Edited image saved to: {temp_file.name}"
+                result_msg = f"Edited image saved to: {temp_file.name}"
+                print(result_msg)
+                return result_msg
 
             # Return mock response for testing (uncomment API calls above when ready)
             # return f"[MOCK] Would edit image with prompt '{prompt}' using model '{model_id}'"
