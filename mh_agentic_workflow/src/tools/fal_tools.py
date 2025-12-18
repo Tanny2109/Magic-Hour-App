@@ -124,7 +124,7 @@ class FalImageGenerationTool(Tool):
         try:
             image_paths = []
             if mode=="fast" or model == "flux-schnell" or model == "flux_krea" or model == "flux-krea":
-                import concurrent.futures
+                from concurrent.futures import ThreadPoolExecutor, as_completed
 
                 # Print debug info
                 debug_info = {
@@ -155,9 +155,9 @@ class FalImageGenerationTool(Tool):
 
                 st = time()
                 # Generate multiple images in parallel for speed
-                with concurrent.futures.ThreadPoolExecutor(max_workers=num_images) as executor:
-                    futures = [executor.submit(generate_single_image, i) for i in range(num_images)]
-                    for future in concurrent.futures.as_completed(futures):
+                with ThreadPoolExecutor(max_workers=num_images) as executor:
+                    future_list = [executor.submit(generate_single_image, i) for i in range(num_images)]
+                    for future in as_completed(future_list):
                         try:
                             image_paths.append(future.result())
                         except Exception as e:
@@ -207,9 +207,10 @@ class FalImageGenerationTool(Tool):
 
                 st = time()
                 # Generate multiple images in parallel using ThreadPoolExecutor
-                with concurrent.futures.ThreadPoolExecutor(max_workers=min(num_images, 4)) as executor:
-                    futures = [executor.submit(generate_single_image, i) for i in range(num_images)]
-                    for future in concurrent.futures.as_completed(futures):
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                with ThreadPoolExecutor(max_workers=min(num_images, 4)) as executor:
+                    future_list = [executor.submit(generate_single_image, i) for i in range(num_images)]
+                    for future in as_completed(future_list):
                         try:
                             result_path = future.result()
                             if result_path:
@@ -436,9 +437,10 @@ class FalImageEditTool(Tool):
                     edited_paths.append(result_path)
             else:
                 # Multiple images - use parallel processing
-                with concurrent.futures.ThreadPoolExecutor(max_workers=min(num_images, 4)) as executor:
-                    futures = [executor.submit(edit_single_image, img_path) for img_path in image_paths]
-                    for future in concurrent.futures.as_completed(futures):
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                with ThreadPoolExecutor(max_workers=min(num_images, 4)) as executor:
+                    future_list = [executor.submit(edit_single_image, img_path) for img_path in image_paths]
+                    for future in as_completed(future_list):
                         try:
                             result_path = future.result()
                             if result_path:
