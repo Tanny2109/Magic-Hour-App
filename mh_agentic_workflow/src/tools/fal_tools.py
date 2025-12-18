@@ -2,6 +2,7 @@
 import os
 import tempfile
 import json
+import concurrent.futures
 from io import BytesIO
 from time import time
 from typing import Optional
@@ -12,8 +13,6 @@ from PIL import Image
 from smolagents import Tool
 
 from requests.adapters import HTTPAdapter, Retry
-import os
-import requests
 import sys
 from dotenv import load_dotenv
 
