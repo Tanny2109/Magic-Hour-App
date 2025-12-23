@@ -1,0 +1,27 @@
+# Alternative Render config without Docker (faster builds, less overhead)
+# To use this: rename to render.yaml
+
+services:
+  # Backend API (LangGraph)
+  - type: web
+    name: magichour-langgraph-api
+    runtime: python
+    buildCommand: |
+      pip install -r mh_langgraph_workflow/requirements.txt
+      cd magicHourApp && npm install && npm run build
+    startCommand: python magicHourApp/api_server.py
+    envVars:
+      - key: FAL_KEY
+        sync: false
+      - key: FAL_MODEL_NAME
+        value: google/gemini-2.5-flash
+      - key: LLM_TEMPERATURE
+        value: 0.7
+      - key: LLM_MAX_TOKENS
+        value: 4096
+      - key: PRODUCTION
+        value: true
+      - key: PORT
+        value: 8000
+    healthCheckPath: /api/health
+    plan: free

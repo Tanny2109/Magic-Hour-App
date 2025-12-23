@@ -1,0 +1,81 @@
+# Exclude smolagents workflow (using LangGraph only)
+mh_agentic_workflow/
+
+# Python cache and virtual environments
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.Python
+**/.venv
+**/venv/
+**/env/
+**/.env.local
+**/.env.*.local
+
+# Node modules (will be installed in Docker)
+**/node_modules/
+magicHourApp/dist/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing and development
+**/__tests__/
+**/test/
+**/tests/
+**/*.test.js
+**/*.test.jsx
+**/*.test.py
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Build artifacts (frontend will be built in Docker)
+build/
+dist/
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Environment files (will be set in Render)
+.env
+.env.*
+
+# Benchmarks
+benchmarks/
+benchmark_results/
+
+# LangGraph specific
+mh_langgraph_workflow/.gradio/
+mh_langgraph_workflow/__pycache__/
+mh_langgraph_workflow/.pytest_cache/
+
+# Other workflows
+mh_*_workflow/
+!mh_langgraph_workflow/
