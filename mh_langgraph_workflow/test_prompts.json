@@ -1,0 +1,144 @@
+{
+  "description": "Test dataset for evaluating context understanding in vague prompts",
+  "test_cases": [
+    {
+      "id": 1,
+      "prompt": "Generate a cyberpunk samurai standing in a neon-lit Tokyo alley at night",
+      "type": "generation",
+      "challenge": "baseline",
+      "expected_behavior": "Clear generation with all specified elements",
+      "depends_on": null
+    },
+    {
+      "id": 2,
+      "prompt": "Make him look older and battle-worn",
+      "type": "edit",
+      "challenge": "pronoun_resolution",
+      "expected_behavior": "Should edit the samurai from prompt 1, adding age and battle damage",
+      "depends_on": 1
+    },
+    {
+      "id": 3,
+      "prompt": "Add his rival approaching from the shadows",
+      "type": "edit",
+      "challenge": "contextual_entity",
+      "expected_behavior": "Should add a rival character matching cyberpunk/samurai theme, not generic",
+      "depends_on": 2
+    },
+    {
+      "id": 4,
+      "prompt": "Now show them fighting",
+      "type": "ambiguous",
+      "challenge": "edit_vs_generate",
+      "expected_behavior": "Should either edit existing or generate new scene with BOTH characters from context",
+      "depends_on": 3
+    },
+    {
+      "id": 5,
+      "prompt": "Generate Sub-Zero from Mortal Kombat in an ice cave",
+      "type": "generation",
+      "challenge": "baseline_with_ip",
+      "expected_behavior": "New context - clear Mortal Kombat character generation",
+      "depends_on": null
+    },
+    {
+      "id": 6,
+      "prompt": "Add scorpio",
+      "type": "edit",
+      "challenge": "contextual_entity_critical",
+      "expected_behavior": "MUST add Scorpion (MK character), NOT a scorpion animal. Classic failure case.",
+      "depends_on": 5
+    },
+    {
+      "id": 7,
+      "prompt": "Make it more intense",
+      "type": "edit",
+      "challenge": "vague_modifier",
+      "expected_behavior": "Should enhance drama/action appropriate for fighting game context",
+      "depends_on": 6
+    },
+    {
+      "id": 8,
+      "prompt": "Generate a cozy cottage in a forest, studio ghibli style",
+      "type": "generation",
+      "challenge": "style_specific",
+      "expected_behavior": "New context with specific art style requirement",
+      "depends_on": null
+    },
+    {
+      "id": 9,
+      "prompt": "Add the old witch from earlier",
+      "type": "edit",
+      "challenge": "hallucination_test",
+      "expected_behavior": "Should recognize no witch exists in history and either ask for clarification or create contextually appropriate witch",
+      "depends_on": 8
+    },
+    {
+      "id": 10,
+      "prompt": "Make it nighttime with fireflies",
+      "type": "edit",
+      "challenge": "style_preservation",
+      "expected_behavior": "Edit lighting/time while preserving Ghibli art style",
+      "depends_on": 9
+    },
+    {
+      "id": 11,
+      "prompt": "She should be tending to her garden",
+      "type": "edit",
+      "challenge": "pronoun_resolution_ambiguous",
+      "expected_behavior": "Should infer 'she' refers to the witch, add gardening activity",
+      "depends_on": 10
+    },
+    {
+      "id": 12,
+      "prompt": "Generate iron man fighting thanos",
+      "type": "generation",
+      "challenge": "baseline_with_ip",
+      "expected_behavior": "New Marvel context with clear characters",
+      "depends_on": null
+    },
+    {
+      "id": 13,
+      "prompt": "Add the spider guy",
+      "type": "edit",
+      "challenge": "contextual_entity",
+      "expected_behavior": "Should add Spider-Man (Marvel), understanding 'spider guy' in Marvel context",
+      "depends_on": 12
+    },
+    {
+      "id": 14,
+      "prompt": "Switch to DC universe style",
+      "type": "edit",
+      "challenge": "universe_shift",
+      "expected_behavior": "Maintain composition but adapt to DC aesthetic/characters or ask for clarification",
+      "depends_on": 13
+    },
+    {
+      "id": 15,
+      "prompt": "More epic",
+      "type": "edit",
+      "challenge": "maximally_vague",
+      "expected_behavior": "Should enhance scale, drama, effects - tests creative interpretation with minimal guidance",
+      "depends_on": 14
+    }
+  ],
+  "challenge_categories": {
+    "baseline": "Clear, unambiguous prompts for comparison",
+    "pronoun_resolution": "Resolving 'him', 'her', 'it', 'them' to correct entities",
+    "contextual_entity": "Understanding vague references based on visual/thematic context",
+    "contextual_entity_critical": "High-stakes contextual understanding (failure = wrong entity type)",
+    "edit_vs_generate": "Ambiguous whether user wants edit or new generation",
+    "vague_modifier": "Abstract descriptors like 'intense', 'epic', 'better'",
+    "style_preservation": "Maintaining art style across edits",
+    "hallucination_test": "Referencing non-existent content from history",
+    "universe_shift": "Major thematic/style changes while preserving composition",
+    "maximally_vague": "Minimal information, maximum interpretation required"
+  },
+  "evaluation_criteria": {
+    "context_understanding": "Did the agent correctly interpret references based on conversation history?",
+    "entity_recognition": "Were vague entity references resolved to correct characters/objects?",
+    "style_consistency": "Was the art style maintained when appropriate?",
+    "appropriate_tool_selection": "Did agent choose edit vs generate correctly?",
+    "error_handling": "How did agent handle impossible/ambiguous requests?"
+  }
+}
