@@ -305,38 +305,17 @@ async def generate_with_streaming(message: str, user_settings: dict, history: li
 Mode: {mode} | Aspect Ratio: {aspect_ratio}
 Default: Generate 4 variations unless user specifies otherwise."""
 
-    # Build image paths reference
+    # Build image paths reference for agent context
     image_paths_ref = ""
     if image_metadata:
         paths_list = "\n".join([f"  - Image {m['index']}: {m['path']}" for m in image_metadata])
         image_paths_ref = f"\n\n[Image File Paths]\n{paths_list}"
 
-    if has_context:
-        yield SSEEvent.format("reasoning", {"content": "👁️ Analyzing images from conversation..."})
+    # Just send the user message + settings
+    # The agent will handle visual analysis internally if needed
+    yield SSEEvent.format("reasoning", {"content": "🧠 Processing your request..."})
 
-        vision_analysis = await analyze_images_with_vision(
-            pil_images,
-            image_metadata,
-            message,
-            selected_image
-        )
-
-        yield SSEEvent.format("reasoning", {"content": "🧠 Understanding visual context..."})
-
-        full_prompt = f"""User request: {message}
-
-{settings_block}
-
-[VISUAL CONTEXT ANALYSIS]
-{vision_analysis}
-{image_paths_ref}
-
-Based on the visual analysis above, execute the user's request appropriately."""
-    else:
-        yield SSEEvent.format("reasoning", {"content": "🧠 Processing your request..."})
-        full_prompt = f"""{message}
-
-{settings_block}"""
+    full_prompt = f"""{message}"""
 
     yield SSEEvent.format("reasoning", {"content": "🤖 Starting generation..."})
 

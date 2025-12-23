@@ -54,6 +54,7 @@ function App() {
     aspectRatio: 'square'
   })
   const [selectedImage, setSelectedImage] = useState(null) // {msgId, imageIndex, url}
+  const [sessionId, setSessionId] = useState(null) // Session persistence for agent memory
   const messagesEndRef = useRef(null)
 
   const scrollToBottom = () => {
@@ -112,7 +113,8 @@ function App() {
         body: JSON.stringify({
           message: messageWithContext,
           settings: { ...settings, selectedImage: selectedImage },
-          history: historyForContext
+          history: historyForContext,
+          session_id: sessionId  // CRITICAL: Send session_id for conversation memory
         })
       })
 
@@ -162,12 +164,45 @@ function App() {
         const reasoningStep = {
           type: 'thought',
           content: data.content,
+          collapsible: false,
           timestamp: Date.now()
         }
         setCurrentReasoning(prev => [...prev, reasoningStep])
         setMessages(prev => prev.map(msg =>
           msg.id === msgId
             ? { ...msg, finalReasoning: [...(msg.finalReasoning || []), reasoningStep] }
+            : msg
+        ))
+        break
+
+      case 'reasoning_step':
+        // Collapsible reasoning from agent
+        const detailedReasoning = {
+          type: 'reasoning',
+          content: data.content,
+          collapsible: data.collapsible !== false,
+          timestamp: Date.now()
+        }
+        setCurrentReasoning(prev => [...prev, detailedReasoning])
+        setMessages(prev => prev.map(msg =>
+          msg.id === msgId
+            ? { ...msg, finalReasoning: [...(msg.finalReasoning || []), detailedReasoning] }
+            : msg
+        ))
+        break
+
+      case 'visual_analysis':
+        // Visual context analysis
+        const visualAnalysis = {
+          type: 'visual',
+          content: data.content,
+          collapsible: data.collapsible !== false,
+          timestamp: Date.now()
+        }
+        setCurrentReasoning(prev => [...prev, visualAnalysis])
+        setMessages(prev => prev.map(msg =>
+          msg.id === msgId
+            ? { ...msg, finalReasoning: [...(msg.finalReasoning || []), visualAnalysis] }
             : msg
         ))
         break
@@ -278,6 +313,11 @@ function App() {
         break
 
       case 'complete':
+        // Save session_id for conversation memory
+        if (data.session_id) {
+          setSessionId(data.session_id)
+          console.log('💾 Session ID saved:', data.session_id)
+        }
         // Mark generation as complete
         setMessages(prev => prev.map(msg =>
           msg.id === msgId

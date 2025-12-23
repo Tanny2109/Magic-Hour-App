@@ -203,23 +203,31 @@ def _analyze_visual_context(
 
     print(f"DEBUG - Running visual context analysis on {len(recent_images)} images...")
 
+    # System prompt for visual analysis
+    system_prompt = SystemMessage(content="""You are an expert at visual analysis for AI image generation.
+Analyze images precisely and identify:
+- Characters (with names if recognizable from games, movies, anime, comics)
+- Art style (realistic, anime, cartoon, digital art, etc.)
+- Setting and theme
+- Universe/franchise if applicable
+
+Be specific and confident. If you see Sub-Zero from Mortal Kombat, SAY SO. Don't be vague.""")
+
     # Build analysis prompt with images
-    analysis_prompt = f"""Analyze these images and the user's request to provide context.
+    analysis_prompt = f"""You are looking at images that were just generated. Analyze them carefully.
 
-[GENERATION HISTORY]
-{chr(10).join(f"Batch {i+1}: {r['prompt']}" for i, r in enumerate(generation_history[-3:]))}
+PREVIOUS GENERATION:
+{chr(10).join(f"Batch {i+1}: Prompt was '{r['prompt']}'" for i, r in enumerate(generation_history[-3:]))}
 
-[USER REQUEST]
-{user_message}
+USER'S NEW REQUEST: "{user_message}"
 
-Provide a brief analysis covering:
-1. What do you see in these images? (characters, style, theme, setting)
-2. What universe/franchise do they belong to? (if recognizable)
-3. Given the user's request "{user_message}", what do they likely want?
-4. Should this be an EDIT (modify existing) or GENERATE (create new)?
-5. If EDIT, which image paths should be edited?
+Your analysis:
+1. **What I see**: Describe the characters, objects, style in these images. Be SPECIFIC with names if recognizable.
+2. **Universe/Theme**: What franchise or universe? (Mortal Kombat, Marvel, anime, etc.)
+3. **User's intent**: Given their request "{user_message}" and what you see, what do they want?
+4. **Recommended action**: EDIT these images OR GENERATE new ones?
 
-Keep it concise (3-4 sentences)."""
+Be concise but CERTAIN. No "probably" or "likely" - state what you see."""
 
     # Build multimodal message with images
     content = []
@@ -233,15 +241,16 @@ Keep it concise (3-4 sentences)."""
 
     content.append({"type": "text", "text": analysis_prompt})
 
-    # Get analysis from LLM
+    # Get analysis from LLM with system prompt
     st = time.time()
     analysis_msg = HumanMessage(content=content)
-    response = llm.invoke([analysis_msg])
+    messages = [system_prompt, analysis_msg]  # Include system prompt!
+    response = llm.invoke(messages)
     et = time.time()
 
     analysis_text = response.content
     print(f"DEBUG - Visual analysis completed in {et - st:.2f}s")
-    print(f"DEBUG - Analysis: {analysis_text[:200]}...")
+    print(f"DEBUG - Analysis: {analysis_text[:300]}...")
 
     return analysis_text
 
@@ -668,12 +677,12 @@ Default: Generate 4 variations unless user specifies otherwise."""
 
         config = {"configurable": {"thread_id": thread_id}}
 
+        # IMPORTANT: Only provide new inputs, not full state
+        # The checkpointer will merge with existing state
+        # Don't override generated_content or generation_history
         initial_state = {
             "messages": [human_message],
-            "generated_content": [],
-            "generation_history": [],
             "settings": settings or {},
-            "pending_tool_call": None,
         }
 
         result = self._graph.invoke(initial_state, config)
@@ -691,12 +700,11 @@ Default: Generate 4 variations unless user specifies otherwise."""
 
         config = {"configurable": {"thread_id": thread_id}}
 
+        # IMPORTANT: Only provide new inputs, not full state
+        # The checkpointer will merge with existing state
         initial_state = {
             "messages": [human_message],
-            "generated_content": [],
-            "generation_history": [],
             "settings": settings or {},
-            "pending_tool_call": None,
         }
 
         for event in self._graph.stream(initial_state, config, stream_mode="values"):
