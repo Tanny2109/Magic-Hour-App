@@ -94,6 +94,7 @@ class ChatRequest(BaseModel):
     message: str
     settings: dict = {}
     history: list = []
+    session_id: str = None  # Optional: Frontend provides to maintain conversation history
 
 
 class SSEEvent:
@@ -273,7 +274,7 @@ Be specific and detailed."""
         return f"Previous images in conversation:\n{image_list_text}\n\nNote: Visual analysis unavailable."
 
 
-async def generate_with_streaming(message: str, user_settings: dict, history: list = None) -> AsyncGenerator[str, None]:
+async def generate_with_streaming(message: str, user_settings: dict, history: list = None, session_id: str = None) -> AsyncGenerator[str, None]:
     """
     Run the LangGraph agent and stream results via SSE.
     """
@@ -282,6 +283,14 @@ async def generate_with_streaming(message: str, user_settings: dict, history: li
     if not agent:
         yield SSEEvent.format("error", {"message": "Agent not initialized"})
         return
+
+    # Use session_id if provided, otherwise create one from timestamp
+    # IMPORTANT: Frontend should maintain session_id to preserve conversation history
+    if not session_id:
+        session_id = f"session-{int(time.time() * 1000)}"
+        print(f"DEBUG - Created new session ID: {session_id}")
+    else:
+        print(f"DEBUG - Using existing session ID: {session_id}")
 
     mode = user_settings.get("mode", "fast")
     aspect_ratio = user_settings.get("aspectRatio", "square")
@@ -340,12 +349,12 @@ Based on the visual analysis above, execute the user's request appropriately."""
     def run_agent():
         nonlocal agent_result, agent_error
         try:
-            # Generate unique thread ID for this request
-            thread_id = f"session-{int(time.time() * 1000)}"
+            # Use the session_id for thread continuity
             agent_result = agent.invoke(
                 message=full_prompt,
                 image_paths=image_paths if image_paths else None,
-                thread_id=thread_id,
+                thread_id=session_id,
+                settings=user_settings,
             )
         except Exception as e:
             print(f"Error in agent execution: {e}")
@@ -472,15 +481,27 @@ Based on the visual analysis above, execute the user's request appropriately."""
 
     total_time = time.time() - start_time
     yield SSEEvent.format("reasoning", {"content": "✅ Complete!"})
-    yield SSEEvent.format("complete", {"duration": total_time})
+    yield SSEEvent.format("complete", {
+        "duration": total_time,
+        "session_id": session_id  # Send session_id back to frontend
+    })
 
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     return StreamingResponse(
-        generate_with_streaming(request.message, request.settings, request.history),
+        generate_with_streaming(
+            request.message,
+            request.settings,
+            request.history,
+            request.session_id
+        ),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
     )
 
 
