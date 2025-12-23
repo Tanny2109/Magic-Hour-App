@@ -1,16 +1,21 @@
 """
 FastAPI backend for Magic Hour AI - streams agent reasoning and results via SSE
+LangGraph version: Uses LangChain/LangGraph with fal.ai LLM
 """
+import fal_client
+from dotenv import load_dotenv
 import os
 import sys
 import json
 import asyncio
 import threading
 import time
-import re
 import tempfile
+import io
+import re
+import base64
 from pathlib import Path
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Optional, List
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -18,55 +23,55 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from PIL import Image
 
-# Add the mh_agentic_workflow to path
-WORKFLOW_PATH = Path(__file__).parent.parent / "mh_agentic_workflow"
+# Add the mh_langgraph_workflow to path
+WORKFLOW_PATH = Path(__file__).parent.parent / "mh_langgraph_workflow"
 sys.path.insert(0, str(WORKFLOW_PATH))
 
 # Load environment variables
-from dotenv import load_dotenv
 load_dotenv(WORKFLOW_PATH / ".env")
 
-# Import agent components (from the existing workflow)
-from src.agents.smolagent_ref import SmolagentFalApp
-from src.core.utils import parse_image_paths, parse_video_paths
-from config.settings import settings
+# Configure fal.ai
+fal_client.api_key = os.getenv("FAL_KEY")
 
-# Initialize the agent
-agent_app: Optional[SmolagentFalApp] = None
+# Import from mh_langgraph_workflow
+from src.agents import create_agent, ContentAgent
+from src.models import FalAILLM
+
+# Global agent instance
+agent: Optional[ContentAgent] = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize agent on startup"""
-    global agent_app
-    print("🚀 Initializing Magic Hour AI Agent...")
+    global agent
+    print("🚀 Initializing Magic Hour AI Agent (LangGraph)...")
     try:
-        settings.validate()
-        agent_app = SmolagentFalApp(
-            hf_token=settings.HF_TOKEN,
-            fal_model_name=settings.FAL_MODEL_NAME
+        agent = create_agent(
+            fal_model_name=os.getenv("FAL_MODEL_NAME", "google/gemini-2.5-flash"),
+            temperature=float(os.getenv("LLM_TEMPERATURE", "0.7")),
+            max_tokens=int(os.getenv("LLM_MAX_TOKENS", "4096")),
         )
-        print("✅ Agent initialized successfully!")
+        print(f"✅ Agent initialized with model: {os.getenv('FAL_MODEL_NAME', 'google/gemini-2.5-flash')}")
     except Exception as e:
         print(f"❌ Failed to initialize agent: {e}")
         raise
     yield
     print("👋 Shutting down...")
 
-app = FastAPI(title="Magic Hour AI", lifespan=lifespan)
+
+app = FastAPI(title="Magic Hour AI (LangGraph)", lifespan=lifespan)
 
 # Detect production mode
 PRODUCTION_MODE = os.getenv("PRODUCTION", "false").lower() == "true"
 
-# CORS for React frontend
+# CORS configuration
 allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"]
 if PRODUCTION_MODE:
-    # Add your production domain here
     production_domain = os.getenv("FRONTEND_URL", "*")
-    if production_domain != "*":
-        allowed_origins.append(production_domain)
-    else:
-        allowed_origins = ["*"]
+    allowed_origins = ["*"] if production_domain == "*" else allowed_origins + [production_domain]
 
 app.add_middleware(
     CORSMiddleware,
@@ -88,23 +93,18 @@ if PRODUCTION_MODE:
 class ChatRequest(BaseModel):
     message: str
     settings: dict = {}
-    history: list = []  # Conversation history with image paths
+    history: list = []
 
 
 class SSEEvent:
-    """Helper to format SSE events"""
     @staticmethod
     def format(event_type: str, data: dict) -> str:
         return f"data: {json.dumps({'type': event_type, **data})}\n\n"
 
 
-def create_blur_thumbnail(image_path: str, size: int = 20) -> str:
-    """Create tiny base64 thumbnail for blur effect (ChatGPT-style)"""
+def create_blur_thumbnail(image_path: str, size: int = 20) -> Optional[str]:
+    """Create tiny base64 thumbnail for blur effect"""
     try:
-        from PIL import Image
-        import io
-        import base64
-
         img = Image.open(image_path)
         img.thumbnail((size, size))
         buffer = io.BytesIO()
@@ -115,613 +115,397 @@ def create_blur_thumbnail(image_path: str, size: int = 20) -> str:
         return None
 
 
-def is_edit_request(message: str) -> bool:
-    """Detect if user is requesting an edit to a previous image"""
-    edit_keywords = [
-        "add to", "edit", "modify", "change", "update", "remove from",
-        "to this", "to it", "this image", "that image", "the image",
-        "to the", "from the", "in the", "on the", "previous image",
-        "first image", "second image", "third image", "last image",
-        "image 1", "image 2", "image 3"
-    ]
-    message_lower = message.lower()
-    return any(keyword in message_lower for keyword in edit_keywords)
-
-
-def is_feedback_or_complaint(message: str) -> tuple[bool, str]:
+def extract_images_from_history(history: list) -> tuple[List[Image.Image], List[dict], List[str]]:
     """
-    Detect if user is giving feedback/complaint about missing elements.
-    Returns (is_feedback, interpreted_intent)
-
-    "doesn't have cats" -> user WANTS cats, they're complaining it's missing
-    "missing the dogs" -> user WANTS dogs
+    Extract PIL images, metadata, and paths from conversation history.
+    Returns: (pil_images, image_metadata, image_paths)
     """
-    message_lower = message.lower()
+    pil_images = []
+    image_metadata = []
+    image_paths = []
+    last_user_prompt = ""
 
-    complaint_patterns = [
-        (r"doesn'?t have (?:any )?(.+)", "missing"),
-        (r"does not have (?:any )?(.+)", "missing"),
-        (r"missing (?:the )?(.+)", "missing"),
-        (r"where (?:are|is) (?:the )?(.+)", "missing"),
-        (r"no (.+) in (?:the |this )?(?:video|image)", "missing"),
-        (r"(.+) (?:is|are) missing", "missing"),
-        (r"forgot (?:the |about )?(.+)", "missing"),
-        (r"didn'?t include (?:the )?(.+)", "missing"),
-        (r"left out (?:the )?(.+)", "missing"),
-    ]
+    if not history:
+        return [], [], []
 
-    for pattern, _ in complaint_patterns:
-        match = re.search(pattern, message_lower)
-        if match:
-            missing_element = match.group(1).strip().rstrip('.')
-            return True, missing_element
-
-    return False, ""
-
-
-async def enhance_prompt_with_cot(message: str, mode: str, aspect_ratio: str, image_context: list = None) -> tuple[str, str, list, int | None]:
-    """
-    Use Chain of Thought reasoning to analyze and enhance the user's prompt.
-    Returns (enhanced_prompt, reasoning_summary, reasoning_steps, num_images)
-
-    num_images is the explicit count if user specified one, None otherwise.
-
-    If this is an edit request referencing previous images, skip enhancement
-    and let the agent handle it with proper context.
-    """
-    global agent_app
-
-    # Check if this is an edit request - don't enhance, let agent handle with context
-    if is_edit_request(message):
-        reasoning_steps = [
-            {"type": "thought", "content": f"Detected edit request: \"{message[:60]}...\"" if len(message) > 60 else f"Detected edit request: \"{message}\""},
-            {"type": "thought", "content": "Passing to agent with image context for editing"},
-        ]
-        return message, "Edit request - using original prompt with context", reasoning_steps, None
-
-    # Build context about previous images if available
-    image_context_str = ""
-    if image_context:
-        image_list = "\n".join([f"- Image {img['generation']}: \"{img['prompt'][:50]}...\"" for img in image_context])
-        image_context_str = f"\n\nPrevious images in conversation:\n{image_list}\n\nIf user references these, don't create new subject - they want to modify existing."
-
-    cot_prompt = f"""You are an expert prompt engineer for AI image generation. Analyze and enhance the user's prompt using step-by-step reasoning.
-
-User's prompt: "{message}"
-Mode: {mode} ({"high quality, detailed" if mode == "pro" else "fast generation"})
-Aspect ratio: {aspect_ratio}{image_context_str}
-
-Think through this step by step:
-
-## Step 1: Core Subject Analysis
-Identify the main subject(s) and their key characteristics.
-IMPORTANT: Note if the user explicitly requested a specific number of images (e.g., "1 image", "5 images", "a single picture").
-
-## Step 2: Missing Visual Elements
-What important visual details are missing? Consider:
-- Environment/setting (if not specified)
-- Time of day and lighting conditions
-- Artistic style or rendering approach
-- Composition and framing for the aspect ratio
-
-## Step 3: Enhancement Plan
-List the specific additions that would improve the image quality without changing the user's intent.
-
-## Step 4: Enhanced Prompt
-Write the final enhanced prompt (under 80 words). Keep the user's original concept but add the visual details identified above.
-
-Respond in this exact format:
-REASONING: [Your step-by-step analysis in 2-3 sentences]
-NUM_IMAGES: [Number if user explicitly specified one (1-4), otherwise "default"]
-ENHANCED: [The final enhanced prompt]"""
-
-    try:
-        from smolagents.models import ChatMessage, MessageRole
-        messages = [ChatMessage(role=MessageRole.USER, content=cot_prompt)]
-        response = agent_app.model.generate(messages, max_tokens=400, temperature=0.7)
-        content = response.content.strip()
-
-        # Parse the structured response
-        reasoning = ""
-        enhanced = message  # fallback to original
-        num_images = None
-
-        if "REASONING:" in content and "ENHANCED:" in content:
-            # Extract NUM_IMAGES if present
-            if "NUM_IMAGES:" in content:
-                num_images_part = content.split("NUM_IMAGES:")[1].split("ENHANCED:")[0].strip()
-                # Parse the number if it's not "default"
-                if num_images_part.lower() != "default":
+    for msg in history:
+        if msg.get("role") == "user":
+            last_user_prompt = msg.get("content", "")
+        elif msg.get("role") == "assistant":
+            for img_url in msg.get("images", []):
+                if "path=" in img_url:
+                    local_path = img_url.split("path=")[-1]
                     try:
-                        num_images = int(re.search(r'\d+', num_images_part).group())
-                        # num_images = max(1, min(num_images, 4))  # Clamp to 1-4
-                    except (ValueError, AttributeError):
-                        num_images = None
+                        img = Image.open(local_path)
+                        pil_images.append(img.copy())
+                        image_paths.append(local_path)
+                        image_metadata.append({
+                            "index": len(pil_images),
+                            "path": local_path,
+                            "prompt": last_user_prompt
+                        })
+                    except Exception as e:
+                        print(f"Could not load image {local_path}: {e}")
 
-            parts = content.split("ENHANCED:")
-            reasoning_part = parts[0].replace("REASONING:", "").strip()
-            # Remove NUM_IMAGES line from reasoning
-            if "NUM_IMAGES:" in reasoning_part:
-                reasoning_part = reasoning_part.split("NUM_IMAGES:")[0].strip()
-            enhanced_part = parts[1].strip() if len(parts) > 1 else message
-
-            reasoning = reasoning_part
-            enhanced = enhanced_part
-
-            # Clean up any markdown or extra formatting
-            enhanced = enhanced.strip('"').strip("'").strip()
-            if enhanced.startswith("**") and enhanced.endswith("**"):
-                enhanced = enhanced[2:-2]
-
-        elif "Enhanced prompt:" in content.lower():
-            enhanced = content.split("Enhanced prompt:")[-1].strip()
-            reasoning = "Analyzed prompt and added visual details"
-        else:
-            # Try to extract just the enhanced part if format wasn't followed
-            enhanced = content.split("\n")[-1].strip() if "\n" in content else content
-            reasoning = "Enhanced with visual details"
-
-        reasoning_steps = [
-            {"type": "thought", "content": f"Analyzing: \"{message[:50]}...\"" if len(message) > 50 else f"Analyzing: \"{message}\""},
-            {"type": "thought", "content": reasoning},
-        ]
-
-        return enhanced, reasoning, reasoning_steps, num_images
-    except Exception as e:
-        print(f"Prompt enhancement failed: {e}")
-        return message, None, [], None
+    return pil_images, image_metadata, image_paths
 
 
-async def generate_reflection_with_llm(message: str, image_paths: list, video_paths: list, reasoning_steps: list, total_time: float, mode: str) -> str:
+def parse_image_paths(text: str) -> List[str]:
+    """Extract image file paths from text."""
+    patterns = [
+        r'(/tmp/[^\s\'"]+\.(?:png|jpg|jpeg|webp))',
+        r'(/var/folders/[^\s\'"]+\.(?:png|jpg|jpeg|webp))',
+    ]
+    paths = []
+    for pattern in patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        paths.extend(matches)
+    return [p for p in set(paths) if os.path.exists(p)]
+
+
+def parse_video_paths(text: str) -> List[str]:
+    """Extract video file paths from text."""
+    patterns = [
+        r'(/tmp/[^\s\'"]+\.(?:mp4|webm|mov))',
+        r'(/var/folders/[^\s\'"]+\.(?:mp4|webm|mov))',
+    ]
+    paths = []
+    for pattern in patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        paths.extend(matches)
+    return [p for p in set(paths) if os.path.exists(p)]
+
+
+async def analyze_images_with_vision(
+    pil_images: List[Image.Image],
+    image_metadata: List[dict],
+    user_message: str,
+    selected_image: Optional[dict] = None
+) -> str:
     """
-    Use the LLM to generate a conversational reflection on the generated result.
-    The LLM receives the actual generated images/videos to analyze.
+    Use the vision model to analyze images and understand context.
     """
-    global agent_app
-    
-    media_paths = image_paths + video_paths
-    if not media_paths:
-        return f"Generation completed in {total_time:.1f}s. Feel free to ask for adjustments!"
-    
-    # Summarize reasoning steps
-    reasoning_summary_parts = []
-    for step in reasoning_steps[:5]:
-        step_type = type(step).__name__
-        if step_type == 'PlanningStep' and hasattr(step, 'plan'):
-            reasoning_summary_parts.append("- Planned approach")
-        elif step_type == 'ToolCall' and hasattr(step, 'name'):
-            reasoning_summary_parts.append(f"- Used tool: {step.name}")
-        elif step_type == 'ActionStep':
-            if hasattr(step, 'observations') and step.observations:
-                reasoning_summary_parts.append("- Executed action")
-        elif step_type == 'FinalAnswerStep':
-            reasoning_summary_parts.append("- Generated result")
-    
-    reasoning_summary = "\n".join(reasoning_summary_parts) if reasoning_summary_parts else "- Generated image"
-    
-    reflection_prompt = f"""Look at this image that was just generated for the request: "{message}"
+    if not pil_images:
+        return ""
 
-What do you notice? Share 2-3 sentences about:
-- What stands out visually
-- What's working well
-- One specific idea to try if they want to iterate
+    # Upload images to fal.ai to get URLs
+    image_urls = []
+    for img in pil_images:
+        try:
+            buffer = io.BytesIO()
+            img.save(buffer, format="PNG")
+            buffer.seek(0)
+            url = fal_client.upload(buffer.read(), "image/png")
+            image_urls.append(url)
+        except Exception as e:
+            print(f"Error uploading image for vision analysis: {e}")
 
-Be casual and direct. Start right away with your observation - no introductions.
+    if not image_urls:
+        return ""
 
-Examples:
-"The lighting really creates a dramatic mood here - love how the shadows play off the subject. The composition feels balanced but you could try a tighter crop to make it more intimate."
+    # Build context about selected image
+    selected_info = ""
+    if selected_image and selected_image.get("url"):
+        url = selected_image["url"]
+        if "path=" in url:
+            selected_path = url.split("path=")[-1]
+            for meta in image_metadata:
+                if meta["path"] == selected_path:
+                    selected_info = f"\n\nThe user has SELECTED Image {meta['index']} for their current request."
+                    break
 
-"Nice color palette, the warm tones give it an inviting vibe. The focus is sharp on the main element. If you want more depth, try adding some blur to the background or play with different times of day."
+    # Build image descriptions
+    image_descriptions = []
+    for meta in image_metadata:
+        prompt_preview = meta["prompt"][:100] + "..." if len(meta["prompt"]) > 100 else meta["prompt"]
+        image_descriptions.append(f"- Image {meta['index']}: Originally generated for \"{prompt_preview}\"")
 
-Now look at the attached image and share your thoughts:"""
-    
+    image_list_text = "\n".join(image_descriptions)
+
+    vision_prompt = f"""You are analyzing images from a conversation to help understand the user's next request.
+
+IMAGES IN THIS CONVERSATION:
+{image_list_text}{selected_info}
+
+USER'S CURRENT REQUEST: "{user_message}"
+
+ANALYZE THE VISUAL CONTENT and provide:
+
+1. **What you see in each image:**
+   - Characters, people, creatures (identify specific characters if recognizable)
+   - Art style (anime, realistic, cartoon, digital art, etc.)
+   - Setting/environment
+   - Theme/universe (gaming, movies, fantasy, etc.)
+
+2. **Context interpretation:**
+   - How should the user's request be interpreted given what you see?
+   - Are there any ambiguous terms that should be clarified based on the visual context?
+
+3. **Recommended action:**
+   - Should this be an EDIT of existing image(s) or a NEW generation?
+   - Which image(s) should be used as the base?
+   - What style/theme should be maintained?
+
+Be specific and detailed."""
+
     try:
-        import fal_client
-        from smolagents.models import ChatMessage, MessageRole
+        # Use fal.ai any-llm for vision analysis
+        messages_content = [{"type": "text", "text": vision_prompt}]
+        for url in image_urls:
+            messages_content.append({"type": "image_url", "image_url": url})
 
-        # Build message with image attachment
-        message_content = [{"type": "text", "text": reflection_prompt}]
-
-        # Add the first image/video for LLM to analyze
-        first_media = media_paths[0]
-        if any(ext in first_media for ext in [".mp4", ".mov", ".webm"]):
-            # For videos, we can't send directly to most LLMs, so describe it
-            message_content.append({"type": "text", "text": f"\n[Video generated at: {first_media}]"})
-        else:
-            # For images, upload to fal.ai first so the LLM can actually see it
-            try:
-                with open(first_media, 'rb') as f:
-                    image_data = f.read()
-                # Upload to fal.ai and get public URL
-                uploaded_image_url = fal_client.upload(image_data, "image/png")
-                message_content.append({"type": "image_url", "image_url": {"url": uploaded_image_url}})
-                print(f"DEBUG - Uploaded image for reflection: {uploaded_image_url}")
-            except Exception as upload_error:
-                print(f"Error uploading image for reflection: {upload_error}")
-                # Fallback to local path (won't work but better than crashing)
-                message_content.append({"type": "image_url", "image_url": {"url": f"file://{first_media}"}})
-
-        messages = [ChatMessage(role=MessageRole.USER, content=message_content)]
-
-        # Use a casual, conversational system prompt
-        reflection_system = """You're a friendly creative giving quick feedback on AI-generated images. Jump straight into your observations - no greetings,
-no "I'm here to help" stuff. Just look at the image and share what you see in 3-4 casual sentences. Be specific and helpful and talk like a friend."""
-
-        response = agent_app.model.generate(
-            messages,
-            max_tokens=250,
-            temperature=0.8,
-            system_prompt=reflection_system
+        result = fal_client.subscribe(
+            "fal-ai/any-llm",
+            arguments={
+                "model": os.getenv("FAL_MODEL_NAME", "google/gemini-2.5-flash"),
+                "messages": [{"role": "user", "content": messages_content}],
+                "prompt": "",
+                "system_prompt": "You are an expert at visual analysis for AI image generation. Be precise and specific.",
+                "max_tokens": 600,
+                "temperature": 0.3,
+            }
         )
-        return response.content.strip()
+
+        return result.get("output", "").strip()
+
     except Exception as e:
-        print(f"Error generating reflection: {e}")
-        return f"Generation completed successfully in {total_time:.1f}s. The result looks great - feel free to ask for adjustments or try something new!"
+        print(f"Error in vision analysis: {e}")
+        return f"Previous images in conversation:\n{image_list_text}\n\nNote: Visual analysis unavailable."
 
 
 async def generate_with_streaming(message: str, user_settings: dict, history: list = None) -> AsyncGenerator[str, None]:
     """
-    Run the agent and stream REAL ReAct reasoning steps:
-    - reasoning: Agent ACTUAL thinking process (from MultiStepAgent)
-    - tool_call: When a tool is invoked (REAL tool calls)
-    - image_preview: Blur thumbnail for progressive loading
-    - image_complete: Image URL ready
-    - video_complete: Video URL ready
-    - reflection: Optional LLM reflection (async, non-blocking)
-    - complete: Generation finished
-    - error: If something goes wrong
+    Run the LangGraph agent and stream results via SSE.
     """
-    global agent_app
+    global agent
 
-    if not agent_app:
+    if not agent:
         yield SSEEvent.format("error", {"message": "Agent not initialized"})
         return
 
-    # Build prompt with settings
     mode = user_settings.get("mode", "fast")
     aspect_ratio = user_settings.get("aspectRatio", "square")
     selected_image = user_settings.get("selectedImage")
-    enable_reflection = True
 
-    # Check if user is giving feedback about missing elements
-    is_complaint, missing_element = is_feedback_or_complaint(message)
-    feedback_context = ""
-    if is_complaint:
-        feedback_context = f"\n\n[USER FEEDBACK INTERPRETATION]\nThe user is expressing that '{missing_element}' is MISSING from the previous result. They WANT '{missing_element}' to be INCLUDED. This is a complaint, not a request to remove it. Please regenerate WITH '{missing_element}' included."
+    # Extract images from history
+    pil_images, image_metadata, image_paths = extract_images_from_history(history)
+    has_context = len(pil_images) > 0
 
-    # Extract PIL images from history WITH file paths and user prompts for agent context
-    from PIL import Image
-    context_images = []
-    image_path_map = []  # List of {generation: int, path: str, prompt: str}
-    generation_num = 1
-    last_user_prompt = ""
+    # Settings block
+    settings_block = f"""[Settings]
+Mode: {mode} | Aspect Ratio: {aspect_ratio}
+Default: Generate 4 variations unless user specifies otherwise."""
 
-    if history:
-        for msg in history:
-            if msg.get("role") == "user":
-                last_user_prompt = msg.get("content", "")
-            elif msg.get("role") == "assistant":
-                msg_images = msg.get("images", [])
-                if msg_images:
-                    for img_url in msg_images:
-                        if "path=" in img_url:
-                            local_path = img_url.split("path=")[-1]
-                            try:
-                                img = Image.open(local_path)
-                                context_images.append(img.copy())
-                                image_path_map.append({
-                                    "generation": generation_num,
-                                    "path": local_path,
-                                    "prompt": last_user_prompt
-                                })
-                                generation_num += 1
-                            except Exception as e:
-                                print(f"Could not load image {local_path}: {e}")
+    # Build image paths reference
+    image_paths_ref = ""
+    if image_metadata:
+        paths_list = "\n".join([f"  - Image {m['index']}: {m['path']}" for m in image_metadata])
+        image_paths_ref = f"\n\n[Image File Paths]\n{paths_list}"
 
-    has_previous_media = len(context_images) > 0
+    if has_context:
+        yield SSEEvent.format("reasoning", {"content": "👁️ Analyzing images from conversation..."})
 
-    # Build image reference context for agent (with actual paths!)
-    settings_text = f"""[System Settings]
-Performance Mode: {mode}
-Aspect Ratio: {aspect_ratio}
-Default Images: Generate 4 image variations by default (use num_images=4). If user explicitly requests a specific number, use that instead.
+        vision_analysis = await analyze_images_with_vision(
+            pil_images,
+            image_metadata,
+            message,
+            selected_image
+        )
 
-IMPORTANT - Parallel Processing for Speed:
-- When editing MULTIPLE images with the SAME prompt, call fal_image_edit ONCE with comma-separated paths
-- Example: image_path="/tmp/img1.png,/tmp/img2.png,/tmp/img3.png" instead of 3 separate calls
-- This processes images in parallel and is 3-4x faster than sequential edits"""
+        yield SSEEvent.format("reasoning", {"content": "🧠 Understanding visual context..."})
 
-    if has_previous_media:
-        # Build clear image reference list with paths and original prompts
-        image_refs = []
-        for img_info in image_path_map:
-            gen = img_info["generation"]
-            path = img_info["path"]
-            prompt = img_info["prompt"]
-            # Include the original prompt so agent knows what each image contains
-            prompt_preview = prompt[:80] + "..." if len(prompt) > 80 else prompt
-            image_refs.append(f"  - Image {gen}: \"{prompt_preview}\" -> {path}")
+        full_prompt = f"""User request: {message}
 
-        image_list = "\n".join(image_refs)
+{settings_block}
 
-        # Check if user selected an image
-        selected_path = None
-        selected_gen = None
-        if selected_image and selected_image.get("url"):
-            url = selected_image["url"]
-            if "path=" in url:
-                selected_path = url.split("path=")[-1]
-                # Find which generation this corresponds to
-                for img_info in image_path_map:
-                    if img_info["path"] == selected_path:
-                        selected_gen = img_info["generation"]
-                        break
+[VISUAL CONTEXT ANALYSIS]
+{vision_analysis}
+{image_paths_ref}
 
-        if selected_path:
-            context_note = f"""[CONVERSATION IMAGE HISTORY]
-Previously generated images in this conversation:
-{image_list}
-
-CURRENTLY SELECTED IMAGE: Image {selected_gen} ({selected_path})
-The user has selected this image. When they say "edit this", "modify it", "change this image", "add to it", etc., use fal_image_edit with this path.
-
-IMPORTANT: Match user references to the correct image:
-- "the cat image" / "the one with the cat" -> find the image whose prompt mentions cats
-- "the first/second/third image" -> Image 1/2/3
-- "that image" / "it" / "this" -> the CURRENTLY SELECTED IMAGE above
-- "the sunset" -> find the image whose prompt mentions sunset"""
-        else:
-            context_note = f"""[CONVERSATION IMAGE HISTORY]
-Previously generated images in this conversation:
-{image_list}
-
-IMPORTANT: Match user references to the correct image based on content:
-- "the cat image" / "the one with the cat" -> find the image whose prompt mentions cats
-- "the first/second/third image" -> Image 1/2/3
-- "that image" / "the previous image" -> the most recently generated image (highest number)
-- When user wants to edit/modify an image, use fal_image_edit with the matched path."""
-
-        current_message_text = f"{message}\n\n{settings_text}\n\n{context_note}{feedback_context}"
+Based on the visual analysis above, execute the user's request appropriately."""
     else:
-        current_message_text = f"{message}\n\n{settings_text}{feedback_context}"
+        yield SSEEvent.format("reasoning", {"content": "🧠 Processing your request..."})
+        full_prompt = f"""{message}
 
+{settings_block}"""
+
+    yield SSEEvent.format("reasoning", {"content": "🤖 Starting generation..."})
+
+    start_time = time.time()
+    agent_result = None
     agent_error = None
-    reasoning_steps = []
+    generated_images = []
+    generated_videos = []
 
-    def run_agent_with_streaming():
-        """Run agent and capture streaming steps with multimodal support"""
-        nonlocal agent_error, reasoning_steps
+    def run_agent():
+        nonlocal agent_result, agent_error
         try:
-            full_prompt = f"[Context: Previous images are attached for your visual analysis]\n\n{current_message_text}" if context_images else current_message_text
-
-            # Pass images directly to agent.run() for proper multimodal support
-            for step in agent_app.agent.run(full_prompt, images=context_images if context_images else None, stream=True):
-                reasoning_steps.append(step)
+            # Generate unique thread ID for this request
+            thread_id = f"session-{int(time.time() * 1000)}"
+            agent_result = agent.invoke(
+                message=full_prompt,
+                image_paths=image_paths if image_paths else None,
+                thread_id=thread_id,
+            )
         except Exception as e:
             print(f"Error in agent execution: {e}")
             import traceback
             traceback.print_exc()
             agent_error = e
 
-    # Enhance prompt with CoT reasoning (pass image context for awareness)
-    yield SSEEvent.format("reasoning", {"content": "🧠 Analyzing your prompt..."})
-    enhanced_prompt, reasoning_summary, cot_steps, explicit_num_images = await enhance_prompt_with_cot(
-        message, mode, aspect_ratio, image_context=image_path_map if has_previous_media else None
-    )
-
-    # Stream the CoT reasoning steps
-    for step in cot_steps:
-        yield SSEEvent.format("reasoning", {"content": step["content"]})
-        await asyncio.sleep(0.05)
-
-    # Send enhanced prompt to frontend
-    if enhanced_prompt != message:
-        yield SSEEvent.format("enhanced_prompt", {"original": message, "enhanced": enhanced_prompt})
-        yield SSEEvent.format("reasoning", {"content": f"✨ Final enhanced prompt ready"})
-
-    # Update settings_text if user explicitly requested a specific number of images
-    if explicit_num_images is not None:
-        settings_text = f"""[System Settings]
-Performance Mode: {mode}
-Aspect Ratio: {aspect_ratio}
-Number of Images: Generate exactly {explicit_num_images} image(s) as explicitly requested by the user (use num_images={explicit_num_images}).
-
-IMPORTANT - Parallel Processing for Speed:
-- When editing MULTIPLE images with the SAME prompt, call fal_image_edit ONCE with comma-separated paths
-- Example: image_path="/tmp/img1.png,/tmp/img2.png,/tmp/img3.png" instead of 3 separate calls
-- This processes images in parallel and is 3-4x faster than sequential edits"""
-
-    # Update the prompt for the agent (preserve context_note with image paths)
-    if has_previous_media:
-        current_message_text = f"{enhanced_prompt}\n\n{settings_text}\n\n{context_note}{feedback_context}"
-    else:
-        current_message_text = f"{enhanced_prompt}\n\n{settings_text}{feedback_context}"
-
-    yield SSEEvent.format("reasoning", {"content": "🤖 Starting generation..."})
-    await asyncio.sleep(0.1)
-
-    # Start agent in background thread with streaming
-    start_time = time.time()
-    agent_thread = threading.Thread(target=run_agent_with_streaming)
+    # Run agent in background thread
+    agent_thread = threading.Thread(target=run_agent)
     agent_thread.start()
 
-    last_step_count = 0
-    image_paths = []
-    video_paths = []
-
-    async def process_step(step):
-        """Process a single agent step and yield SSE events"""
-        nonlocal image_paths, video_paths
-        step_type = type(step).__name__
-
-        if step_type == 'PlanningStep' and hasattr(step, 'plan'):
-            plan_text = str(step.plan).strip()
-            if plan_text:
-                if "## 2. Plan" in plan_text:
-                    plan_section = plan_text.split("## 2. Plan")[1].split("```")[0].strip()
-                    yield SSEEvent.format("reasoning", {"content": f"📋 Planning:\n{plan_section[:400]}"})
-                else:
-                    yield SSEEvent.format("reasoning", {"content": "📋 Analyzing your request and planning..."})
-                await asyncio.sleep(0.05)
-
-        elif step_type == 'ToolCall' and hasattr(step, 'name'):
-            tool_args = str(step.arguments) if hasattr(step, 'arguments') else ""
-            friendly_tool = step.name
-            if "fal_image_generation" in tool_args:
-                friendly_tool = "Image Generation"
-            elif "fal_video_generation" in tool_args:
-                friendly_tool = "Video Generation"
-            elif "fal_image_edit" in tool_args:
-                friendly_tool = "Image Editing"
-
-            yield SSEEvent.format("tool_call", {"tool": friendly_tool, "args": tool_args[:200]})
-            yield SSEEvent.format("reasoning", {"content": f"🔧 Using {friendly_tool}..."})
-            await asyncio.sleep(0.05)
-
-        elif step_type == 'ActionStep':
-            if hasattr(step, 'model_output') and step.model_output:
-                reasoning_text = str(step.model_output).strip()
-                if "Thought:" in reasoning_text:
-                    thought = reasoning_text.split("Thought:")[1].split("<code>")[0].strip()
-                    yield SSEEvent.format("reasoning", {"content": f"💭 {thought}"})
-                    await asyncio.sleep(0.05)
-
-            if hasattr(step, 'observations') and step.observations:
-                observation = str(step.observations)
-                new_images = parse_image_paths(observation)
-                for img_path in new_images:
-                    if img_path not in image_paths:
-                        image_paths.append(img_path)
-                        yield SSEEvent.format("reasoning", {"content": "✅ Image generated successfully"})
-                        thumbnail = create_blur_thumbnail(img_path)
-                        if thumbnail:
-                            yield SSEEvent.format("image_preview", {"blur_data": thumbnail})
-                            await asyncio.sleep(0.05)
-                        yield SSEEvent.format("image_complete", {"url": f"/api/media?path={img_path}"})
-                        await asyncio.sleep(0.05)
-
-                new_videos = parse_video_paths(observation)
-                for vid_path in new_videos:
-                    if vid_path not in video_paths:
-                        video_paths.append(vid_path)
-                        yield SSEEvent.format("reasoning", {"content": "✅ Video generated successfully"})
-                        yield SSEEvent.format("video_complete", {"url": f"/api/media?path={vid_path}"})
-                        await asyncio.sleep(0.05)
-
-        elif step_type == 'FinalAnswerStep':
-            if hasattr(step, 'output'):
-                output_str = str(step.output)
-                # Extract any images from final answer
-                final_images = parse_image_paths(output_str)
-                for img_path in final_images:
-                    if img_path not in image_paths:
-                        image_paths.append(img_path)
-                        yield SSEEvent.format("image_complete", {"url": f"/api/media?path={img_path}"})
-
-                # Send text response to UI (agent's message to user)
-                # Remove image paths from text to get clean message
-                clean_output = output_str
-                for img_path in final_images:
-                    clean_output = clean_output.replace(img_path, "").strip()
-                clean_output = clean_output.replace("Generated image(s):", "").strip()
-                clean_output = clean_output.replace(",", "").strip()
-
-                if clean_output and len(clean_output) > 5:
-                    yield SSEEvent.format("agent_message", {"content": clean_output})
-
-            yield SSEEvent.format("reasoning", {"content": "✅ Complete!"})
-            await asyncio.sleep(0.05)
-
-    # Stream reasoning as it happens
+    # Poll for completion
     while agent_thread.is_alive():
-        if len(reasoning_steps) > last_step_count:
-            for step in reasoning_steps[last_step_count:]:
-                async for event in process_step(step):
-                    yield event
-            last_step_count = len(reasoning_steps)
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.2)
 
     agent_thread.join()
 
-    # Process any remaining steps after thread finishes
-    if len(reasoning_steps) > last_step_count:
-        for step in reasoning_steps[last_step_count:]:
-            async for event in process_step(step):
-                yield event
-
-    total_time = time.time() - start_time
-
-    # Handle errors
     if agent_error:
         yield SSEEvent.format("error", {"message": str(agent_error)})
         return
 
-    # Complete event (don't block on reflection)
-    yield SSEEvent.format("complete", {"duration": total_time})
+    # Process the result
+    if agent_result:
+        messages = agent_result.get("messages", [])
+        generated_content = agent_result.get("generated_content", [])
 
-    # Optional: Generate reflection AFTER completion (non-blocking)
-    if enable_reflection and (image_paths or video_paths):
-        try:
-            reflection = await generate_reflection_with_llm(
-                message=message,
-                image_paths=image_paths,
-                video_paths=video_paths,
-                reasoning_steps=reasoning_steps,
-                total_time=total_time,
-                mode=mode
-            )
-            yield SSEEvent.format("reflection", {"content": reflection})
-        except Exception as e:
-            print(f"Error generating reflection (non-critical): {e}")
+        # Extract final response and tool results
+        final_response = ""
+        reasoning_steps = []  # Collect all reasoning steps
+        visual_analysis_content = None
+
+        for msg in messages:
+            msg_content = msg.content if hasattr(msg, 'content') else str(msg)
+            msg_type = type(msg).__name__
+
+            # Handle custom message types
+            if msg_type == "ReasoningMessage":
+                # Reasoning/thinking message - add to collapsible dropdown
+                reasoning_steps.append(str(msg_content))
+                yield SSEEvent.format("reasoning_step", {
+                    "content": str(msg_content),
+                    "collapsible": True
+                })
+                await asyncio.sleep(0.01)
+
+            elif msg_type == "VisualAnalysisMessage":
+                # Visual context analysis
+                visual_analysis_content = str(msg_content)
+                yield SSEEvent.format("visual_analysis", {
+                    "content": str(msg_content),
+                    "collapsible": True
+                })
+                await asyncio.sleep(0.01)
+
+            elif msg_type == "HumanMessage" and "[Tool Result" in str(msg_content):
+                # Process tool results for images/videos
+                content_str = str(msg_content)
+
+                for img_path in parse_image_paths(content_str):
+                    if img_path not in generated_images:
+                        generated_images.append(img_path)
+                        yield SSEEvent.format("reasoning_step", {"content": "✅ Image generated", "collapsible": False})
+                        thumbnail = create_blur_thumbnail(img_path)
+                        if thumbnail:
+                            yield SSEEvent.format("image_preview", {"blur_data": thumbnail})
+                        yield SSEEvent.format("image_complete", {"url": f"/api/media?path={img_path}"})
+                        await asyncio.sleep(0.05)
+
+                for vid_path in parse_video_paths(content_str):
+                    if vid_path not in generated_videos:
+                        generated_videos.append(vid_path)
+                        yield SSEEvent.format("reasoning_step", {"content": "✅ Video generated", "collapsible": False})
+                        yield SSEEvent.format("video_complete", {"url": f"/api/media?path={vid_path}"})
+                        await asyncio.sleep(0.05)
+
+            elif msg_type == "AIMessage":
+                content_str = str(msg_content)
+
+                # Check for tool calls in response
+                if '{"tool":' in content_str or '"tool"' in content_str:
+                    # Extract the reasoning part before the tool call (if not already captured)
+                    if "[REASONING]" in content_str:
+                        # Already handled by ReasoningMessage
+                        pass
+                    elif "```json" in content_str:
+                        reasoning = content_str.split("```json")[0].strip()
+                        if reasoning and reasoning not in reasoning_steps:
+                            reasoning_steps.append(reasoning)
+                            yield SSEEvent.format("reasoning_step", {
+                                "content": reasoning[:500],
+                                "collapsible": True
+                            })
+                else:
+                    # This is a final response
+                    final_response = content_str
+
+        # Also check generated_content from state
+        for path in generated_content:
+            if path.endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                if path not in generated_images:
+                    generated_images.append(path)
+                    thumbnail = create_blur_thumbnail(path)
+                    if thumbnail:
+                        yield SSEEvent.format("image_preview", {"blur_data": thumbnail})
+                    yield SSEEvent.format("image_complete", {"url": f"/api/media?path={path}"})
+            elif path.endswith(('.mp4', '.webm', '.mov')):
+                if path not in generated_videos:
+                    generated_videos.append(path)
+                    yield SSEEvent.format("video_complete", {"url": f"/api/media?path={path}"})
+
+        # Send final message if present
+        if final_response:
+            # Clean up the response
+            clean_response = final_response
+            for path in generated_images + generated_videos:
+                clean_response = clean_response.replace(path, "").strip()
+
+            # Remove tool call JSON if present
+            if "```json" in clean_response:
+                clean_response = clean_response.split("```json")[0].strip()
+
+            if clean_response and len(clean_response) > 5:
+                yield SSEEvent.format("agent_message", {"content": clean_response})
+
+    total_time = time.time() - start_time
+    yield SSEEvent.format("reasoning", {"content": "✅ Complete!"})
+    yield SSEEvent.format("complete", {"duration": total_time})
 
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
-    """Stream chat responses via Server-Sent Events"""
     return StreamingResponse(
         generate_with_streaming(request.message, request.settings, request.history),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
     )
 
 
 @app.get("/api/media")
 async def serve_media(path: str):
-    """Serve generated media files (with security validation)"""
+    """Serve generated media files with security validation"""
     try:
-        # Security: Resolve the path and check it's in temp directory
         resolved_path = Path(path).resolve()
         temp_dir = Path(tempfile.gettempdir()).resolve()
 
-        # Ensure the path is within temp directory (prevent path traversal)
         if not str(resolved_path).startswith(str(temp_dir)):
             raise HTTPException(status_code=403, detail="Access denied")
 
         if not resolved_path.exists():
             raise HTTPException(status_code=404, detail="File not found")
 
-        # Validate file extension
-        ext = resolved_path.suffix.lower()
         content_types = {
-            ".png": "image/png",
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".webp": "image/webp",
-            ".mp4": "video/mp4",
-            ".webm": "video/webm"
+            ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".webp": "image/webp", ".mp4": "video/mp4", ".webm": "video/webm"
         }
-
+        ext = resolved_path.suffix.lower()
         if ext not in content_types:
             raise HTTPException(status_code=400, detail="Unsupported file type")
 
-        return FileResponse(
-            str(resolved_path),
-            media_type=content_types[ext]
-        )
+        return FileResponse(str(resolved_path), media_type=content_types[ext])
     except HTTPException:
         raise
     except Exception as e:
@@ -731,28 +515,21 @@ async def serve_media(path: str):
 
 @app.get("/api/health")
 async def health():
-    """Health check endpoint"""
-    return {"status": "ok", "agent_ready": agent_app is not None}
+    return {"status": "ok", "agent_ready": agent is not None, "backend": "langgraph"}
 
 
-# Serve frontend index.html for all non-API routes (production only)
 if PRODUCTION_MODE:
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
-        """Serve the React app for all non-API routes"""
         frontend_dist = Path(__file__).parent / "dist"
-        index_file = frontend_dist / "index.html"
-
-        # If path starts with api, return 404
         if full_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="API endpoint not found")
 
-        # Check if file exists in dist
         requested_file = frontend_dist / full_path
         if requested_file.exists() and requested_file.is_file():
             return FileResponse(requested_file)
 
-        # Otherwise serve index.html (for client-side routing)
+        index_file = frontend_dist / "index.html"
         if index_file.exists():
             return FileResponse(index_file)
 
@@ -761,7 +538,7 @@ if PRODUCTION_MODE:
 
 if __name__ == "__main__":
     import uvicorn
-    print("🌟 Starting Magic Hour AI Server...")
+    print("🌟 Starting Magic Hour AI Server (LangGraph)...")
     print("📡 API: http://localhost:8000")
     print("🎨 Frontend: http://localhost:5173")
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
