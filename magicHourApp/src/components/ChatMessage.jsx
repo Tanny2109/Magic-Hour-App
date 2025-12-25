@@ -2,7 +2,7 @@ import ProgressiveImage from './ProgressiveImage'
 import ReasoningPanel from './ReasoningPanel'
 
 function ChatMessage({ message, reasoning, selectedImage, onImageSelect }) {
-  const { role, content, images, videos, description, isLoading, isGeneratingImage, reflection, imagePreviews, enhancedPrompt, finalReasoning, id } = message
+  const { role, content, images, videos, description, isLoading, isGeneratingImage, reflection, enhancedPrompt, finalReasoning, id } = message
 
   const handleImageClick = (idx, url) => {
     if (onImageSelect) {
@@ -63,7 +63,6 @@ function ChatMessage({ message, reasoning, selectedImage, onImageSelect }) {
                 <ProgressiveImage
                   src={url}
                   alt={`Variation ${idx + 1}`}
-                  blurPreview={imagePreviews?.[idx]}
                   disableExpand={true}
                 />
                 {isSelected(idx) && <div className="selected-badge">✓ Selected</div>}

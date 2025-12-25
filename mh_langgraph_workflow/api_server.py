@@ -1,4 +1,5 @@
 """FastAPI server for the LangGraph content generation agent."""
+from src.agents import create_agent
 import os
 import json
 import asyncio
@@ -15,7 +16,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from src.agents import create_agent
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -35,7 +35,8 @@ app.add_middleware(
 
 # Global agent instance (per-thread isolation via thread_id)
 agent = create_agent(
-    fal_model_name=os.getenv("FAL_MODEL_NAME", "google/gemini-2.5-flash"),
+    fal_model_name=os.getenv(
+        "FAL_MODEL_NAME", "google/gemini-3-flash-preview"),
     temperature=float(os.getenv("LLM_TEMPERATURE", "0.7")),
     max_tokens=int(os.getenv("LLM_MAX_TOKENS", "4096")),
 )
@@ -89,7 +90,8 @@ def _extract_response_text(messages) -> str:
                 return msg.content
             elif isinstance(msg.content, list):
                 # Handle multimodal responses
-                text_parts = [p.get("text", "") for p in msg.content if isinstance(p, dict) and p.get("type") == "text"]
+                text_parts = [p.get("text", "") for p in msg.content if isinstance(
+                    p, dict) and p.get("type") == "text"]
                 return " ".join(text_parts)
 
     return ""
@@ -179,12 +181,14 @@ async def chat_stream(request: ChatRequest):
 
                         if msg_type == "ToolMessage":
                             # Tool result
-                            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+                            content = msg.content if isinstance(
+                                msg.content, str) else str(msg.content)
                             yield f"data: {json.dumps({'type': 'tool_result', 'content': content})}\n\n"
 
                             # Check for generated content paths
                             import re
-                            paths = re.findall(r'(/[^\s]+\.(?:png|jpg|jpeg|webp|mp4))', content)
+                            paths = re.findall(
+                                r'(/[^\s]+\.(?:png|jpg|jpeg|webp|mp4))', content)
                             for path in paths:
                                 if os.path.exists(path):
                                     if path.endswith(".mp4"):
@@ -193,7 +197,8 @@ async def chat_stream(request: ChatRequest):
                                         yield f"data: {json.dumps({'type': 'image_complete', 'path': path})}\n\n"
 
                         elif msg_type == "AIMessage":
-                            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+                            content = msg.content if isinstance(
+                                msg.content, str) else str(msg.content)
                             yield f"data: {json.dumps({'type': 'assistant', 'content': content})}\n\n"
 
                 # Allow other tasks to run
@@ -259,7 +264,8 @@ async def get_history(thread_id: str):
     history = []
     for msg in messages:
         msg_type = type(msg).__name__
-        content = msg.content if isinstance(msg.content, str) else str(msg.content)
+        content = msg.content if isinstance(
+            msg.content, str) else str(msg.content)
         history.append({
             "type": msg_type,
             "content": content

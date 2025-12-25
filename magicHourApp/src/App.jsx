@@ -221,18 +221,6 @@ function App() {
         ))
         break
 
-      case 'image_preview':
-        // Add blur thumbnail for progressive loading
-        setMessages(prev => prev.map(msg =>
-          msg.id === msgId
-            ? {
-                ...msg,
-                imagePreviews: [...(msg.imagePreviews || []), data.blur_data]
-              }
-            : msg
-        ))
-        break
-
       case 'image_progress':
         setMessages(prev => prev.map(msg =>
           msg.id === msgId

@@ -49,7 +49,7 @@ class FalAILLM(BaseChatModel):
     """
 
     fal_api: str = Field(default="openrouter/router")
-    fal_model_name: str = Field(default="google/gemini-3-flash-preview")
+    fal_model_name: str = Field(default="google/gemini-2.5-flash")
     temperature: float = Field(default=0.7)
     max_tokens: int = Field(default=4096)
     api_key: Optional[str] = Field(default=None)

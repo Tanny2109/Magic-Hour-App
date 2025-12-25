@@ -7,6 +7,8 @@ import time
 from typing import Annotated, TypedDict, Sequence, Optional, List
 from dataclasses import dataclass, field
 
+import fal_client
+
 from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
@@ -84,6 +86,7 @@ class GenerationRecord(TypedDict):
     prompt: str
     paths: List[str]
     type: str  # "image" or "video"
+    description: str  # Visual description of what was generated (cached)
 
 
 class ReasoningMessage(BaseMessage):
@@ -188,71 +191,218 @@ def _needs_visual_context(user_message: str) -> bool:
     return any(pattern in message_lower for pattern in referential_patterns)
 
 
-def _analyze_visual_context(
-    llm: FalAILLM,
-    recent_images: List[str],
+def _find_relevant_images(
     user_message: str,
-    generation_history: List[GenerationRecord]
-) -> str:
-    """Analyze recent images to provide context for the agent.
+    generation_history: List[GenerationRecord],
+    max_images: int = 4
+) -> tuple[List[str], List[dict]]:
+    """Find relevant images based on user message.
 
-    Returns a text analysis that helps interpret the user's request.
+    Smart lookup that:
+    1. Checks for explicit batch references ("batch 1", "the first one")
+    2. Searches prompts for keyword matches ("the dragon" -> finds dragon batch)
+    3. Falls back to latest batch if no specific reference found
+
+    Returns:
+        tuple: (image_paths, batch_metadata)
     """
-    if not recent_images:
+    if not generation_history:
+        return [], []
+
+    message_lower = user_message.lower()
+    matched_batches = []
+
+    # 1. Check for explicit batch/position references
+    batch_patterns = [
+        (r'batch\s*(\d+)', lambda m: int(m.group(1)) - 1),  # "batch 1" -> index 0
+        (r'(\d+)(?:st|nd|rd|th)\s*(?:image|one|batch)', lambda m: int(m.group(1)) - 1),  # "1st image"
+        (r'(?:the\s+)?first\s+(?:image|one|batch)', lambda m: 0),
+        (r'(?:the\s+)?second\s+(?:image|one|batch)', lambda m: 1),
+        (r'(?:the\s+)?third\s+(?:image|one|batch)', lambda m: 2),
+        (r'(?:the\s+)?last\s+(?:image|one|batch)', lambda m: -1),
+        (r'(?:the\s+)?previous\s+(?:image|one|batch)', lambda m: -2),
+        (r'(?:the\s+)?earlier\s+(?:image|one|batch)', lambda m: 0),  # Assume first
+    ]
+
+    for pattern, idx_func in batch_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            try:
+                idx = idx_func(match)
+                if idx < 0:
+                    idx = len(generation_history) + idx
+                if 0 <= idx < len(generation_history):
+                    matched_batches.append(idx)
+                    print(f"DEBUG - Explicit batch reference found: batch {idx + 1}")
+            except (ValueError, IndexError):
+                pass
+
+    # 2. Search prompts AND descriptions for keyword matches (only if no explicit reference)
+    if not matched_batches:
+        # Extract potential keywords from user message (nouns, descriptors)
+        # Simple approach: look for words > 3 chars that aren't common words
+        stop_words = {
+            "the", "add", "edit", "change", "make", "with", "this", "that",
+            "these", "those", "from", "into", "more", "less", "like", "same",
+            "image", "images", "picture", "pictures", "photo", "photos",
+            "please", "could", "would", "should", "want", "need", "can",
+        }
+
+        words = re.findall(r'\b[a-z]{4,}\b', message_lower)
+        keywords = [w for w in words if w not in stop_words]
+
+        if keywords:
+            print(f"DEBUG - Searching prompts/descriptions for keywords: {keywords}")
+
+            for idx, record in enumerate(generation_history):
+                prompt_lower = record["prompt"].lower()
+                description_lower = record.get("description", "").lower()
+                searchable_text = f"{prompt_lower} {description_lower}"
+
+                # Check if any keyword matches the prompt or description
+                for keyword in keywords:
+                    if keyword in searchable_text:
+                        if idx not in matched_batches:
+                            matched_batches.append(idx)
+                            match_source = "description" if keyword in description_lower else "prompt"
+                            print(f"DEBUG - Keyword '{keyword}' matched batch {idx + 1} ({match_source})")
+                        break
+
+    # 3. Fall back to latest batch if nothing matched
+    if not matched_batches:
+        matched_batches = [len(generation_history) - 1]
+        print(f"DEBUG - No specific reference found, using latest batch")
+
+    # Collect images from matched batches
+    image_paths = []
+    batch_metadata = []
+
+    for batch_idx in matched_batches:
+        record = generation_history[batch_idx]
+        if record["type"] == "image":
+            for path in record["paths"]:
+                if os.path.exists(path) and len(image_paths) < max_images:
+                    image_paths.append(path)
+                    batch_metadata.append({
+                        "batch": batch_idx + 1,
+                        "prompt": record["prompt"],
+                        "description": record.get("description", ""),
+                        "path": path
+                    })
+
+    print(f"DEBUG - Found {len(image_paths)} relevant images from {len(matched_batches)} batch(es)")
+    return image_paths, batch_metadata
+
+
+def _format_visual_context(
+    batch_metadata: List[dict],
+    user_message: str
+) -> str:
+    """Format cached image descriptions as context for the agent.
+
+    Uses pre-computed descriptions from generation time - no vision API call needed.
+
+    Args:
+        batch_metadata: List of dicts with batch/prompt/description info for each image
+        user_message: The user's current request
+
+    Returns:
+        Formatted context text for the agent.
+    """
+    if not batch_metadata:
         return ""
 
-    print(f"DEBUG - Running visual context analysis on {len(recent_images)} images...")
+    print(f"DEBUG - Formatting visual context from {len(batch_metadata)} cached descriptions")
 
-    # System prompt for visual analysis
-    system_prompt = SystemMessage(content="""You are an expert at visual analysis for AI image generation.
-Analyze images precisely and identify:
-- Characters (with names if recognizable from games, movies, anime, comics)
-- Art style (realistic, anime, cartoon, digital art, etc.)
-- Setting and theme
-- Universe/franchise if applicable
+    # Build context from cached descriptions
+    context_lines = []
+    for i, meta in enumerate(batch_metadata):
+        batch_num = meta['batch']
+        description = meta.get('description', '')
+        path = meta.get('path', '')
 
-Be specific and confident. If you see Sub-Zero from Mortal Kombat, SAY SO. Don't be vague.""")
+        if description:
+            context_lines.append(f"**Batch {batch_num}** ({path}):\n  {description}")
+        else:
+            # Fallback to prompt if no description
+            context_lines.append(f"**Batch {batch_num}** ({path}):\n  Generated from: {meta['prompt'][:100]}")
 
-    # Build analysis prompt with images
-    analysis_prompt = f"""You are looking at images that were just generated. Analyze them carefully.
+    context = "\n\n".join(context_lines)
 
-PREVIOUS GENERATION:
-{chr(10).join(f"Batch {i+1}: Prompt was '{r['prompt']}'" for i, r in enumerate(generation_history[-3:]))}
+    analysis = f"""## Images in Context
 
-USER'S NEW REQUEST: "{user_message}"
+{context}
 
-Your analysis:
-1. **What I see**: Describe the characters, objects, style in these images. Be SPECIFIC with names if recognizable.
-2. **Universe/Theme**: What franchise or universe? (Mortal Kombat, Marvel, anime, etc.)
-3. **User's intent**: Given their request "{user_message}" and what you see, what do they want?
-4. **Recommended action**: EDIT these images OR GENERATE new ones?
+## User Request
+"{user_message}"
 
-Be concise but CERTAIN. No "probably" or "likely" - state what you see."""
+## Available Paths for Editing
+{chr(10).join(f"- {meta['path']}" for meta in batch_metadata)}"""
 
-    # Build multimodal message with images
-    content = []
-    for img_path in recent_images[:4]:  # Max 4 images for analysis
-        base64_url = _image_to_base64(img_path)
-        if base64_url:
-            content.append({
-                "type": "image_url",
-                "image_url": {"url": base64_url}
-            })
+    print(f"DEBUG - Visual context formatted (no API call needed)")
+    return analysis
 
-    content.append({"type": "text", "text": analysis_prompt})
 
-    # Get analysis from LLM with system prompt
-    st = time.time()
-    analysis_msg = HumanMessage(content=content)
-    messages = [system_prompt, analysis_msg]  # Include system prompt!
-    response = llm.invoke(messages)
-    et = time.time()
+def _describe_generated_images(
+    image_paths: List[str],
+    prompt_used: str,
+    model_name: str = "google/gemini-2.5-flash"
+) -> str:
+    """Describe generated images right after creation.
 
-    analysis_text = response.content
-    print(f"DEBUG - Visual analysis completed in {et - st:.2f}s")
-    print(f"DEBUG - Analysis: {analysis_text[:300]}...")
+    This runs once per generation and caches the description for future reference.
+    Fast and concise - just captures what's visually present.
+    """
+    if not image_paths:
+        return ""
 
-    return analysis_text
+    # Only analyze first image (they're usually variations of same prompt)
+    image_path = image_paths[0]
+    if not os.path.exists(image_path):
+        return f"Generated from prompt: {prompt_used}"
+
+    print(f"DEBUG - Describing generated image: {image_path}")
+
+    try:
+        # Upload image
+        with open(image_path, "rb") as f:
+            image_data = f.read()
+        content_type = "image/png" if image_path.lower().endswith(".png") else "image/jpeg"
+        image_url = fal_client.upload(image_data, content_type)
+
+        # Get concise description
+        st = time.time()
+        result = fal_client.subscribe(
+            "openrouter/router/vision",
+            arguments={
+                "model": model_name,
+                "image_url": [image_url],
+                "prompt": f"""Describe this AI-generated image in 1-2 sentences.
+
+Original prompt was: "{prompt_used}"
+
+Focus on:
+- Main subject (character, object, scene)
+- Notable visual style or aesthetic
+- Key details that would help identify this image later
+
+Be specific but brief. Example: "A fierce dragon with orange scales breathing blue fire, fantasy digital art style with dramatic lighting."
+""",
+                "system_prompt": "You describe images concisely for cataloging. Output only the description, nothing else.",
+                "max_tokens": 100,
+                "temperature": 0.3,
+            }
+        )
+        et = time.time()
+
+        description = result.get("output", "").strip()
+        print(f"DEBUG - Image described in {et - st:.2f}s: {description[:100]}...")
+
+        return description if description else f"Generated from: {prompt_used}"
+
+    except Exception as e:
+        print(f"DEBUG - Image description failed: {e}")
+        return f"Generated from: {prompt_used}"
 
 
 def _extract_reasoning(text: str) -> Optional[str]:
@@ -311,8 +461,102 @@ def _parse_tool_call(text: str) -> Optional[dict]:
     return None
 
 
-def _execute_tool(tool_name: str, args: dict) -> str:
-    """Execute a tool and return the result."""
+def _enrich_prompt(
+    prompt: str,
+    tool_name: str,
+    model_name: str = "google/gemini-2.5-flash"
+) -> str:
+    """Enrich a user prompt with more detail and style for better generation.
+
+    Uses a fast LLM call to enhance simple prompts into rich, detailed ones.
+    """
+    if not prompt or len(prompt) > 500:
+        # Skip enrichment for empty or already detailed prompts
+        return prompt
+
+    print(f"DEBUG - Enriching prompt: '{prompt[:100]}...'")
+
+    if tool_name == "generate_images":
+        system = "You enhance image generation prompts. Output ONLY the enhanced prompt, nothing else."
+        enrichment_prompt = f"""Enhance this image prompt to be more vivid and detailed for AI image generation.
+
+Original: "{prompt}"
+
+Add:
+- Specific visual details (lighting, colors, composition)
+- Art style or medium (digital art, oil painting, photography, anime, etc.)
+- Mood and atmosphere
+- Quality keywords (highly detailed, 4k, masterpiece)
+
+Keep it concise (under 100 words). Output ONLY the enhanced prompt."""
+
+#     elif tool_name == "edit_images":
+#         system = "You enhance image editing prompts. Output ONLY the enhanced prompt, nothing else."
+#         enrichment_prompt = f"""Enhance this image editing prompt to be more specific for AI image editing.
+
+# Original: "{prompt}"
+
+# Make it more specific about:
+# - What exactly to change/add/remove
+# - How to preserve existing style and quality and content.
+# - Specific visual details for the edit
+
+# Keep it concise (under 50 words). Output ONLY the enhanced prompt."""
+
+    elif tool_name == "generate_video":
+        system = "You enhance video generation prompts. Output ONLY the enhanced prompt, nothing else."
+        enrichment_prompt = f"""Enhance this video prompt to be more cinematic and detailed.
+
+Original: "{prompt}"
+
+Add:
+- Camera movement (pan, zoom, tracking shot)
+- Motion details (how things move, speed)
+- Atmosphere and mood
+- Cinematic quality keywords
+
+Keep it concise (under 80 words). Output ONLY the enhanced prompt."""
+    else:
+        return prompt
+
+    try:
+        st = time.time()
+        result = fal_client.subscribe(
+            "openrouter/router",  # Non-vision endpoint for text-only
+            arguments={
+                "model": model_name,
+                "prompt": enrichment_prompt,
+                "system_prompt": system,
+                "max_tokens": 200,
+                "temperature": 0.7,
+            }
+        )
+        et = time.time()
+
+        enhanced = result.get("output", "").strip()
+
+        # Clean up any quotes or prefixes the LLM might add
+        enhanced = enhanced.strip('"\'')
+        if enhanced.lower().startswith("enhanced:"):
+            enhanced = enhanced[9:].strip()
+        if enhanced.lower().startswith("prompt:"):
+            enhanced = enhanced[7:].strip()
+
+        print(f"DEBUG - Enriched prompt in {et - st:.2f}s: '{enhanced[:100]}...'")
+
+        return enhanced if enhanced else prompt
+
+    except Exception as e:
+        print(f"DEBUG - Prompt enrichment failed: {e}")
+        return prompt
+
+
+def _execute_tool(tool_name: str, args: dict, model_name: str = "google/gemini-2.5-flash") -> tuple[str, str]:
+    """Execute a tool and return the result.
+
+    Returns:
+        tuple: (result, enhanced_prompt) - enhanced_prompt is the enriched prompt if applicable
+    """
     print(f"\n{'='*80}")
     print(f"DEBUG - Executing Tool: {tool_name}")
     print(f"DEBUG - Tool Args: {json.dumps(args, indent=2)}")
@@ -327,7 +571,17 @@ def _execute_tool(tool_name: str, args: dict) -> str:
     if tool_name not in tools:
         error_msg = f"Error: Unknown tool '{tool_name}'. Available tools: {list(tools.keys())}"
         print(f"DEBUG - Tool execution error: {error_msg}")
-        return error_msg
+        return error_msg, ""
+
+    # Enrich the prompt before execution
+    original_prompt = args.get("prompt", "")
+    enhanced_prompt = ""
+
+    if original_prompt and tool_name in ["generate_images", "edit_images", "generate_video"]:
+        enhanced_prompt = _enrich_prompt(original_prompt, tool_name, model_name)
+        if enhanced_prompt != original_prompt:
+            args = dict(args)  # Copy to avoid mutating original
+            args["prompt"] = enhanced_prompt
 
     try:
         st = time.time()
@@ -337,12 +591,12 @@ def _execute_tool(tool_name: str, args: dict) -> str:
         et = time.time()
         print(f"DEBUG - Tool {tool_name} completed in {et - st:.2f}s")
         print(f"DEBUG - Tool result: {result[:500] if len(result) > 500 else result}")
-        return result
+        return result, enhanced_prompt
     except Exception as e:
         print(f"DEBUG - Tool execution EXCEPTION: {type(e).__name__}: {e}")
         import traceback
         traceback.print_exc()
-        return f"Error executing {tool_name}: {str(e)}"
+        return f"Error executing {tool_name}: {str(e)}", enhanced_prompt
 
 
 @dataclass
@@ -369,6 +623,7 @@ class ContentAgent:
     def _build_graph(self) -> StateGraph:
         """Build the LangGraph state graph."""
         llm = self._llm
+        model_name = self.fal_model_name  # Capture for visual analysis
 
         def agent_node(state: AgentState) -> dict:
             """Process messages and generate response."""
@@ -413,18 +668,17 @@ Mode: {mode} | Aspect Ratio: {aspect_ratio}
 Default: Generate 4 variations unless user specifies otherwise."""
 
             if history:
-                # Get recent images
-                recent_batch = history[-1] if history else None
-                recent_images = []
-                if recent_batch and recent_batch["type"] == "image":
-                    recent_images = [p for p in recent_batch["paths"] if os.path.exists(p)]
+                # Smart image lookup: find relevant images based on user message
+                relevant_images, batch_metadata = _find_relevant_images(
+                    user_message, history, max_images=4
+                )
 
                 # Check if visual context analysis is needed
-                needs_context = _needs_visual_context(user_message) and recent_images
+                needs_context = _needs_visual_context(user_message) and relevant_images
                 print(f"DEBUG - User message: '{user_message[:100]}...'")
                 print(f"DEBUG - Needs visual context: {needs_context}")
 
-                # Build image paths reference
+                # Build image paths reference (all images for agent context)
                 image_paths_ref = ""
                 if history:
                     paths_list = []
@@ -434,32 +688,24 @@ Default: Generate 4 variations unless user specifies otherwise."""
                     image_paths_ref = f"\n\n[Image File Paths]\n" + "\n".join(paths_list)
 
                 if needs_context:
-                    # Emit visual analysis message for UI
+                    # Format visual context from cached descriptions (no API call!)
+                    visual_context = _format_visual_context(batch_metadata, user_message)
+
+                    # Emit context message for UI
                     messages_to_emit.append(VisualAnalysisMessage(
-                        content="👁️ Analyzing images from conversation..."
+                        content=f"📋 Found {len(relevant_images)} relevant image(s) from history"
                     ))
 
-                    # Run visual analysis
-                    visual_analysis = _analyze_visual_context(
-                        llm, recent_images, user_message, history
-                    )
-
-                    # Emit the analysis result for UI
-                    messages_to_emit.append(VisualAnalysisMessage(
-                        content=f"Visual Analysis:\n{visual_analysis}"
-                    ))
-
-                    # Build enhanced prompt
+                    # Build enhanced prompt with cached context
                     context_parts = [
                         f"User request: {user_message}",
                         "",
                         settings_block,
                         "",
-                        "[VISUAL CONTEXT ANALYSIS]",
-                        visual_analysis,
-                        image_paths_ref,
+                        "[VISUAL CONTEXT - from cached descriptions]",
+                        visual_context,
                         "",
-                        "Based on the visual analysis above, execute the user's request appropriately."
+                        "Use the image paths above for editing. Preserve the described style."
                     ]
                     context_text = "\n".join(context_parts)
                 else:
@@ -562,12 +808,13 @@ Default: Generate 4 variations unless user specifies otherwise."""
 
             tool_name = tool_call.get("tool")
             args = tool_call.get("args", {})
+            original_prompt = args.get("prompt", "")
 
             print(f"DEBUG - About to execute tool: {tool_name}")
             print(f"DEBUG - With args: {json.dumps(args, indent=2)}")
 
-            # Execute the tool
-            result = _execute_tool(tool_name, args)
+            # Execute the tool (with prompt enrichment)
+            result, enhanced_prompt = _execute_tool(tool_name, args, model_name)
 
             print(f"DEBUG - Tool execution finished")
             print(f"DEBUG - Result preview: {result[:300]}..." if len(result) > 300 else f"DEBUG - Result: {result}")
@@ -582,30 +829,44 @@ Default: Generate 4 variations unless user specifies otherwise."""
             existing_content = state.get("generated_content", [])
             existing_history = state.get("generation_history", [])
 
-            # Create a generation record with the prompt used
+            # Create a generation record with description
             new_history = list(existing_history)
+            prompt_for_record = enhanced_prompt if enhanced_prompt else original_prompt
+
             if new_content:
-                prompt_used = args.get("prompt", "unknown prompt")
                 content_type = "video" if new_video_paths else "image"
+
+                # Describe the generated images (cache for future reference)
+                description = ""
+                if new_image_paths:
+                    description = _describe_generated_images(
+                        new_image_paths, prompt_for_record, model_name
+                    )
+
                 new_record: GenerationRecord = {
-                    "prompt": prompt_used,
+                    "prompt": prompt_for_record,
                     "paths": new_content,
                     "type": content_type,
+                    "description": description,
                 }
                 new_history.append(new_record)
-                print(f"DEBUG - Added generation record: {content_type} with prompt '{prompt_used[:50]}...'")
+                print(f"DEBUG - Added generation record: {content_type} with description '{description[:50]}...'" if description else f"DEBUG - Added generation record: {content_type}")
 
-            # Build reflection on generated content
+            # Build messages to return
             messages_to_return = []
+
+            # Add prompt enrichment message if prompt was enhanced
+            if enhanced_prompt and enhanced_prompt != original_prompt:
+                enrichment_msg = f"✨ Enhanced prompt: {enhanced_prompt}"
+                messages_to_return.append(ReasoningMessage(content=enrichment_msg))
+                print(f"DEBUG - Added prompt enrichment message")
 
             # Add content reflection message
             if new_content:
                 content_count = len(new_content)
                 content_type_str = "video" if new_video_paths else "image"
-                reflection = f"✅ Successfully generated {content_count} {content_type_str}(s) with the prompt: '{args.get('prompt', 'unknown')[:100]}'"
-                messages_to_return.append(ReasoningMessage(
-                    content=reflection
-                ))
+                reflection = f"✅ Generated {content_count} {content_type_str}(s)"
+                messages_to_return.append(ReasoningMessage(content=reflection))
                 print(f"DEBUG - Added content reflection message")
 
             # Return tool result as AIMessage (so it displays to user)

@@ -94,7 +94,7 @@ class ChatRequest(BaseModel):
     message: str
     settings: dict = {}
     history: list = []
-    session_id: str = None  # Optional: Frontend provides to maintain conversation history
+    session_id: Optional[str] = None  # Optional: Frontend provides to maintain conversation history
 
 
 class SSEEvent:
@@ -175,103 +175,6 @@ def parse_video_paths(text: str) -> List[str]:
         matches = re.findall(pattern, text, re.IGNORECASE)
         paths.extend(matches)
     return [p for p in set(paths) if os.path.exists(p)]
-
-
-async def analyze_images_with_vision(
-    pil_images: List[Image.Image],
-    image_metadata: List[dict],
-    user_message: str,
-    selected_image: Optional[dict] = None
-) -> str:
-    """
-    Use the vision model to analyze images and understand context.
-    """
-    if not pil_images:
-        return ""
-
-    # Upload images to fal.ai to get URLs
-    image_urls = []
-    for img in pil_images:
-        try:
-            buffer = io.BytesIO()
-            img.save(buffer, format="PNG")
-            buffer.seek(0)
-            url = fal_client.upload(buffer.read(), "image/png")
-            image_urls.append(url)
-        except Exception as e:
-            print(f"Error uploading image for vision analysis: {e}")
-
-    if not image_urls:
-        return ""
-
-    # Build context about selected image
-    selected_info = ""
-    if selected_image and selected_image.get("url"):
-        url = selected_image["url"]
-        if "path=" in url:
-            selected_path = url.split("path=")[-1]
-            for meta in image_metadata:
-                if meta["path"] == selected_path:
-                    selected_info = f"\n\nThe user has SELECTED Image {meta['index']} for their current request."
-                    break
-
-    # Build image descriptions
-    image_descriptions = []
-    for meta in image_metadata:
-        prompt_preview = meta["prompt"][:100] + "..." if len(meta["prompt"]) > 100 else meta["prompt"]
-        image_descriptions.append(f"- Image {meta['index']}: Originally generated for \"{prompt_preview}\"")
-
-    image_list_text = "\n".join(image_descriptions)
-
-    vision_prompt = f"""You are analyzing images from a conversation to help understand the user's next request.
-
-IMAGES IN THIS CONVERSATION:
-{image_list_text}{selected_info}
-
-USER'S CURRENT REQUEST: "{user_message}"
-
-ANALYZE THE VISUAL CONTENT and provide:
-
-1. **What you see in each image:**
-   - Characters, people, creatures (identify specific characters if recognizable)
-   - Art style (anime, realistic, cartoon, digital art, etc.)
-   - Setting/environment
-   - Theme/universe (gaming, movies, fantasy, etc.)
-
-2. **Context interpretation:**
-   - How should the user's request be interpreted given what you see?
-   - Are there any ambiguous terms that should be clarified based on the visual context?
-
-3. **Recommended action:**
-   - Should this be an EDIT of existing image(s) or a NEW generation?
-   - Which image(s) should be used as the base?
-   - What style/theme should be maintained?
-
-Be specific and detailed."""
-
-    try:
-        # Use fal.ai any-llm for vision analysis
-        messages_content = [{"type": "text", "text": vision_prompt}]
-        for url in image_urls:
-            messages_content.append({"type": "image_url", "image_url": url})
-
-        result = fal_client.subscribe(
-            "fal-ai/any-llm",
-            arguments={
-                "model": os.getenv("FAL_MODEL_NAME", "google/gemini-2.5-flash"),
-                "messages": [{"role": "user", "content": messages_content}],
-                "prompt": "",
-                "system_prompt": "You are an expert at visual analysis for AI image generation. Be precise and specific.",
-                "max_tokens": 600,
-                "temperature": 0.3,
-            }
-        )
-
-        return result.get("output", "").strip()
-
-    except Exception as e:
-        print(f"Error in vision analysis: {e}")
-        return f"Previous images in conversation:\n{image_list_text}\n\nNote: Visual analysis unavailable."
 
 
 async def generate_with_streaming(message: str, user_settings: dict, history: list = None, session_id: str = None) -> AsyncGenerator[str, None]:
@@ -357,15 +260,23 @@ Default: Generate 4 variations unless user specifies otherwise."""
 
     # Process the result
     if agent_result:
-        messages = agent_result.get("messages", [])
-        generated_content = agent_result.get("generated_content", [])
+        all_messages = agent_result.get("messages", [])
+        generation_history = agent_result.get("generation_history", [])
+        
+        # Only process NEW messages added in this turn
+        # We look for the last HumanMessage and take everything after it
+        new_messages = []
+        for msg in reversed(all_messages):
+            if type(msg).__name__ == "HumanMessage":
+                break
+            new_messages.insert(0, msg)
 
         # Extract final response and tool results
         final_response = ""
         reasoning_steps = []  # Collect all reasoning steps
         visual_analysis_content = None
 
-        for msg in messages:
+        for msg in new_messages:
             msg_content = msg.content if hasattr(msg, 'content') else str(msg)
             msg_type = type(msg).__name__
 
@@ -388,36 +299,44 @@ Default: Generate 4 variations unless user specifies otherwise."""
                 })
                 await asyncio.sleep(0.01)
 
-            elif msg_type == "HumanMessage" and "[Tool Result" in str(msg_content):
-                # Process tool results for images/videos
-                content_str = str(msg_content)
-
-                for img_path in parse_image_paths(content_str):
-                    if img_path not in generated_images:
-                        generated_images.append(img_path)
-                        yield SSEEvent.format("reasoning_step", {"content": "✅ Image generated", "collapsible": False})
-                        thumbnail = create_blur_thumbnail(img_path)
-                        if thumbnail:
-                            yield SSEEvent.format("image_preview", {"blur_data": thumbnail})
-                        yield SSEEvent.format("image_complete", {"url": f"/api/media?path={img_path}"})
-                        await asyncio.sleep(0.05)
-
-                for vid_path in parse_video_paths(content_str):
-                    if vid_path not in generated_videos:
-                        generated_videos.append(vid_path)
-                        yield SSEEvent.format("reasoning_step", {"content": "✅ Video generated", "collapsible": False})
-                        yield SSEEvent.format("video_complete", {"url": f"/api/media?path={vid_path}"})
-                        await asyncio.sleep(0.05)
-
             elif msg_type == "AIMessage":
                 content_str = str(msg_content)
 
-                # Check for tool calls in response
-                if '{"tool":' in content_str or '"tool"' in content_str:
-                    # Extract the reasoning part before the tool call (if not already captured)
+                # Only extract paths from TOOL RESULT messages (not tool calls)
+                # Tool results contain "Successfully" while tool calls contain the original paths
+                is_tool_result = "Successfully" in content_str
+
+                if is_tool_result:
+                    found_images = parse_image_paths(content_str)
+                    found_videos = parse_video_paths(content_str)
+
+                    for img_path in found_images:
+                        if img_path not in generated_images:
+                            generated_images.append(img_path)
+                            yield SSEEvent.format("image_complete", {"url": f"/api/media?path={img_path}"})
+                            await asyncio.sleep(0.05)
+
+                    for vid_path in found_videos:
+                        if vid_path not in generated_videos:
+                            generated_videos.append(vid_path)
+                            yield SSEEvent.format("video_complete", {"url": f"/api/media?path={vid_path}"})
+                            await asyncio.sleep(0.05)
+
+                # Check for tool calls in response (agent reasoning)
+                elif '{"tool":' in content_str or '"tool"' in content_str:
+                    # Extract the reasoning part before the tool call
                     if "[REASONING]" in content_str:
-                        # Already handled by ReasoningMessage
-                        pass
+                        # Extract reasoning between [REASONING] and the tool call
+                        import re
+                        reasoning_match = re.search(r'\[REASONING\](.*?)(?=\[ACTION\]|\{|```)', content_str, re.DOTALL)
+                        if reasoning_match:
+                            reasoning = reasoning_match.group(1).strip()
+                            if reasoning and reasoning not in reasoning_steps:
+                                reasoning_steps.append(reasoning)
+                                yield SSEEvent.format("reasoning_step", {
+                                    "content": reasoning,
+                                    "collapsible": True
+                                })
                     elif "```json" in content_str:
                         reasoning = content_str.split("```json")[0].strip()
                         if reasoning and reasoning not in reasoning_steps:
@@ -427,22 +346,25 @@ Default: Generate 4 variations unless user specifies otherwise."""
                                 "collapsible": True
                             })
                 else:
-                    # This is a final response
+                    # This is a conversational response (no tool call)
                     final_response = content_str
 
-        # Also check generated_content from state
-        for path in generated_content:
-            if path.endswith(('.png', '.jpg', '.jpeg', '.webp')):
-                if path not in generated_images:
-                    generated_images.append(path)
-                    thumbnail = create_blur_thumbnail(path)
-                    if thumbnail:
-                        yield SSEEvent.format("image_preview", {"blur_data": thumbnail})
-                    yield SSEEvent.format("image_complete", {"url": f"/api/media?path={path}"})
-            elif path.endswith(('.mp4', '.webm', '.mov')):
-                if path not in generated_videos:
-                    generated_videos.append(path)
-                    yield SSEEvent.format("video_complete", {"url": f"/api/media?path={path}"})
+        # If no images were found in new AIMessages, check the LATEST batch from generation_history only
+        if not generated_images and not generated_videos and generation_history:
+            latest_batch = generation_history[-1]
+            if latest_batch["type"] == "image":
+                for path in latest_batch["paths"]:
+                    if os.path.exists(path) and path not in generated_images:
+                        generated_images.append(path)
+                        thumbnail = create_blur_thumbnail(path)
+                        if thumbnail:
+                            yield SSEEvent.format("image_preview", {"blur_data": thumbnail})
+                        yield SSEEvent.format("image_complete", {"url": f"/api/media?path={path}"})
+            elif latest_batch["type"] == "video":
+                for path in latest_batch["paths"]:
+                    if os.path.exists(path) and path not in generated_videos:
+                        generated_videos.append(path)
+                        yield SSEEvent.format("video_complete", {"url": f"/api/media?path={path}"})
 
         # Send final message if present
         if final_response:
@@ -538,7 +460,7 @@ if PRODUCTION_MODE:
 
 if __name__ == "__main__":
     import uvicorn
-    print("🌟 Starting Magic Hour AI Server (LangGraph)...")
-    print("📡 API: http://localhost:8000")
-    print("🎨 Frontend: http://localhost:5173")
+    print("Starting Magic Hour AI Server (LangGraph)...")
+    print("API: http://localhost:8000")
+    print("Frontend: http://localhost:5173")
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

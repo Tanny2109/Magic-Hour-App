@@ -14,7 +14,7 @@ from langchain_core.tools import tool
 # Configure fal.ai
 fal_client.api_key = os.getenv("FAL_KEY")
 
-EDIT_MODEL = "fal-ai/bytedance/seedream/v4/edit"
+EDIT_MODEL = "fal-ai/bytedance/seedream/v4.5/edit"
 
 
 class ImageEditInput(BaseModel):
