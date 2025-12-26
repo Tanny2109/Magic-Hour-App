@@ -349,7 +349,7 @@ function App() {
             <ChatMessage
               key={msg.id || idx}
               message={msg}
-              reasoning={msg.role === 'assistant' && msg.isLoading ? currentReasoning : null}
+              reasoning={msg.role === 'assistant' && (msg.isLoading || msg.isGeneratingImage) ? currentReasoning : null}
               selectedImage={selectedImage}
               onImageSelect={setSelectedImage}
             />

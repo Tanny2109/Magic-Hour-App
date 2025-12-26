@@ -14,6 +14,10 @@ function ChatMessage({ message, reasoning, selectedImage, onImageSelect }) {
     return selectedImage?.msgId === id && selectedImage?.imageIndex === idx
   }
 
+  const isLive = isLoading || isGeneratingImage
+  const reasoningSteps = (reasoning && reasoning.length) ? reasoning : (finalReasoning || [])
+  const showReasoning = (reasoningSteps && reasoningSteps.length > 0) || isLive
+
   return (
     <div className={`message ${role}`}>
       <div className="message-avatar">
@@ -29,8 +33,12 @@ function ChatMessage({ message, reasoning, selectedImage, onImageSelect }) {
           </div>
         )}
 
-        {finalReasoning && finalReasoning.length > 0 && (
-          <ReasoningPanel steps={finalReasoning} isLive={isLoading} />
+        {showReasoning && (
+          <ReasoningPanel
+            steps={reasoningSteps}
+            isLive={isLive}
+            autoExpandLive={true}
+          />
         )}
 
         {isLoading && !images?.length && !videos?.length && (

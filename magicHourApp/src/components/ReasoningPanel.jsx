@@ -1,56 +1,29 @@
 import { useState, useEffect, useRef } from 'react'
 
-function ReasoningPanel({ steps, isLive }) {
+function ReasoningPanel({ steps, isLive, autoExpandLive = true }) {
   const [isExpanded, setIsExpanded] = useState(false)
-  const [displayedText, setDisplayedText] = useState('')
-  const [currentStepIndex, setCurrentStepIndex] = useState(0)
   const contentRef = useRef(null)
 
-  // Get the current step being displayed
-  const currentStep = steps[currentStepIndex]
-  const hasMultipleSteps = steps.length > 1
-
-  // Animate text appearing character by character for the current step
   useEffect(() => {
-    if (!currentStep || isExpanded) return
-
-    const fullText = currentStep.content || ''
-    let charIndex = 0
-    setDisplayedText('')
-
-    const interval = setInterval(() => {
-      if (charIndex < fullText.length) {
-        setDisplayedText(fullText.slice(0, charIndex + 1))
-        charIndex++
-      } else {
-        clearInterval(interval)
-        // Move to next step after a pause
-        if (currentStepIndex < steps.length - 1) {
-          setTimeout(() => {
-            setCurrentStepIndex(prev => prev + 1)
-          }, 500)
-        }
-      }
-    }, 15) // Speed of typing
-
-    return () => clearInterval(interval)
-  }, [currentStep, currentStepIndex, isExpanded])
-
-  // Reset when steps change significantly
-  useEffect(() => {
-    if (steps.length > 0 && currentStepIndex >= steps.length) {
-      setCurrentStepIndex(steps.length - 1)
+    if (autoExpandLive && isLive) {
+      setIsExpanded(true)
     }
-  }, [steps.length, currentStepIndex])
+  }, [autoExpandLive, isLive])
 
-  // Auto-scroll content when expanded
+  // Auto-scroll content when expanded and new steps arrive
   useEffect(() => {
     if (isExpanded && contentRef.current) {
       contentRef.current.scrollTop = contentRef.current.scrollHeight
     }
   }, [steps, isExpanded])
 
-  if (!steps || steps.length === 0) return null
+  if ((!steps || steps.length === 0) && !isLive) return null
+
+  const lastStep = steps && steps.length ? steps[steps.length - 1] : null
+  const previewText = lastStep?.content || ''
+  const previewTrimmed = previewText.length > 140
+    ? `${previewText.slice(0, 140)}...`
+    : previewText
 
   const getStepIcon = (step) => {
     switch (step?.type) {
@@ -72,57 +45,35 @@ function ReasoningPanel({ steps, isLive }) {
     }
   }
 
-  const formatContent = (content) => {
-    if (!content) return ''
-    // Truncate very long content in collapsed view
-    if (content.length > 200) {
-      return content.slice(0, 200) + '...'
+  const handleToggle = () => setIsExpanded(prev => !prev)
+  const handleKeyDown = (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      handleToggle()
     }
-    return content
   }
 
   return (
-    <div className={`reasoning-panel ${isExpanded ? 'expanded' : ''} ${isLive ? 'live' : ''}`}>
-      {/* Collapsed view - shows current thinking line */}
-      {!isExpanded && (
-        <div className="reasoning-collapsed" onClick={() => setIsExpanded(true)}>
-          <div className="reasoning-line">
-            <span className="reasoning-icon">{getStepIcon(currentStep)}</span>
-            <span className="reasoning-label">{getStepLabel(currentStep)}</span>
-            {isLive && <span className="thinking-dots"><span>.</span><span>.</span><span>.</span></span>}
-          </div>
-          <div className="reasoning-preview">
-            {formatContent(displayedText)}
-            {isLive && displayedText.length < (currentStep?.content?.length || 0) && (
-              <span className="cursor">|</span>
-            )}
-          </div>
-          {hasMultipleSteps && (
-            <div className="reasoning-expand-hint">
-              <span className="step-count">{steps.length} steps</span>
-              <span className="expand-text">Click to expand</span>
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-              </svg>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Expanded view - shows all steps */}
-      {isExpanded && (
+    <div className={`reasoning-panel ${isLive ? 'live' : ''}`}>
+      {isExpanded ? (
         <div className="reasoning-expanded">
-          <div className="reasoning-header" onClick={() => setIsExpanded(false)}>
+          <div
+            className="reasoning-header"
+            role="button"
+            tabIndex={0}
+            onClick={handleToggle}
+            onKeyDown={handleKeyDown}
+          >
             <span className="reasoning-title">🧠 Agent Reasoning</span>
-            <div className="reasoning-collapse">
-              <span>Collapse</span>
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M3 7.5L6 4.5L9 7.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            <span className="reasoning-collapse">
+              Collapse
+              <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                <path d="M5.3 12.7a1 1 0 0 1 0-1.4l4-4a1 1 0 0 1 1.4 0l4 4a1 1 0 1 1-1.4 1.4L10 9.4l-3.3 3.3a1 1 0 0 1-1.4 0z" />
               </svg>
-            </div>
+            </span>
           </div>
           <div className="reasoning-steps" ref={contentRef}>
-            {steps.map((step, idx) => (
+            {steps && steps.map((step, idx) => (
               <div
                 key={idx}
                 className={`reasoning-step ${step.type || ''}`}
@@ -149,6 +100,33 @@ function ReasoningPanel({ steps, isLive }) {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      ) : (
+        <div
+          className="reasoning-collapsed"
+          role="button"
+          tabIndex={0}
+          onClick={handleToggle}
+          onKeyDown={handleKeyDown}
+        >
+          <div className="reasoning-line">
+            <span className="reasoning-icon">🧠</span>
+            <span className="reasoning-label">Agent reasoning</span>
+            {isLive && (
+              <span className="thinking-dots"><span>.</span><span>.</span><span>.</span></span>
+            )}
+          </div>
+          <div className="reasoning-preview">
+            {previewTrimmed || 'Awaiting reasoning...'}
+            {isLive && <span className="cursor">|</span>}
+          </div>
+          <div className="reasoning-expand-hint">
+            <span className="step-count">{steps ? steps.length : 0} steps</span>
+            <span className="expand-text">Click to expand</span>
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path d="M14.7 7.3a1 1 0 0 1 0 1.4l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 1 1 1.4-1.4L10 10.6l3.3-3.3a1 1 0 0 1 1.4 0z" />
+            </svg>
           </div>
         </div>
       )}
